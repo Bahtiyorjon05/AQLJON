@@ -22,9 +22,12 @@ logger = logging.getLogger(__name__)
 
 # Config—locked and loaded
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_TOKEN = os.getenvI("TELEGRAM_BOT_TOKEN")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 PORT = int(os.getenv("PORT", 8443))
+
+# Log REDIS_URL for debugging
+logger.info(f"Using REDIS_URL: {REDIS_URL}")
 
 # Validate env vars with a retry
 for _ in range(3):  # Retry 3 times, 2s delay
