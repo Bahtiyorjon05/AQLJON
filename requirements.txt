@@ -33,7 +33,7 @@ pydantic==2.11.2
 pydantic_core==2.33.1
 pyparsing==3.2.3
 python-dotenv==1.1.0
-python-telegram-bot==22.0
+python-telegram-bot[webhooks]==20.7
 redis==5.2.1
 requests==2.32.3
 rsa==4.9
