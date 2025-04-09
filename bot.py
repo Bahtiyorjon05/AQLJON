@@ -191,13 +191,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_startup(app: Application):
     global aiohttp_session
     aiohttp_session = aiohttp.ClientSession()
-    await redis_client.ping() and logger.info(f"Redis locked in at {REDIS_URL}")
+    try:
+        await redis_client.ping()
+        logger.info(f"Redis locked in at {REDIS_URL}")
+    except Exception as e:
+        logger.error(f"Redis connection failed: {e}")
+        raise  # Let Railway retry the deployment
     logger.info("Bot’s live, bro!")
 
 async def on_shutdown(app: Application):
     if aiohttp_session:
         await aiohttp_session.close()
-    await redis_client.close()
+    await redis_client.aclose()  # Fixed deprecation warning
     logger.info("Bot’s out—peace!")
 
 # Main—blast off
