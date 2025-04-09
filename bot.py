@@ -195,7 +195,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(response) > 4096:
             for i in range(0, len(response), 4096):
                 await update.message.reply_text(response[i:i + 4096])
-                await asyncio.sleep(0.05)  # Add slight delay for Telegram
+                await asyncio.sleep(0.05)
         else:
             await update.message.reply_text(response)
     except TelegramError:
