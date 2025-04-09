@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Config—locked and loaded
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
-TELEGRAM_TOKEN = os.getenvI("TELEGRAM_BOT_TOKEN")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 PORT = int(os.getenv("PORT", 8443))
 
@@ -220,11 +220,11 @@ def main():
     app.post_shutdown = on_shutdown
 
     app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=TELEGRAM_TOKEN,
-        webhook_url=f"https://web-production-cf21.up.railway.app/{TELEGRAM_TOKEN}"
-    )
+    listen="0.0.0.0",
+    port=PORT,
+    url_path=TELEGRAM_TOKEN,
+    webhook_url=f"https://web-production-cf21.up.railway.app/{TELEGRAM_TOKEN}"
+)
 
 if __name__ == "__main__":
     main()
