@@ -1,124 +1,243 @@
+from dotenv import load_dotenv
+load_dotenv()
 
-#   Gemini Chatbot
-
-import os 
+import os
 import logging
 import asyncio
 import time
+import json
+import hashlib
 from telegram import Update
-from telegram.ext import(
+from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
     filters,
     ContextTypes
 )
-
-import google.generativeai as genai 
+import google.generativeai as genai
 import redis.asyncio as redis
 import aiohttp
-import tenacity 
-import json
-import hashlib
+import tenacity
+from telegram.constants import ChatAction
+from telegram.error import TelegramError
 
-# Configuration
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
-MODEL = genai.GenerativeModel('gemini-2.0-pro')
-
-# Global aiohttp session variable (will be initialized on startup)
-aiohttp_session: aiohttp.ClientSession = None
-
-# Initialize Redis client
-redis_client = redis.from_url(
-    REDIS_URL,
-    encoding="utf-8",
-    decode_responses=True,
-    max_connections=20
-)
-
-# Logging configuration
+# Logging
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-MAX_HISTORY_LENGTH = 30  # Maximum stored messages (user + bot pairs)
-RATE_LIMIT = 5  # Maximum requests per minute
-WELCOME_MESSAGE = ("Assalomu alaykum! Men Gemini Chatbotman. Sizga qanday yordam bera olishim mumkin? ")
+# Configuration
+GEMINI_KEY = os.getenv("GEMINI_API_KEY") or exit("GEMINI_API_KEY not set")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or exit("TELEGRAM_BOT_TOKEN not set")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+PORT = int(os.getenv("PORT", 8443))
 
+genai.configure(api_key=GEMINI_KEY)
+MODEL = genai.GenerativeModel('gemini-2.0-flash')
 
-# Helper function to generate a unique key for each chat
-def generate_cache_key(history: list) -> str:
+# Redis & HTTP Session
+redis_client = redis.from_url(
+    REDIS_URL, encoding="utf-8", decode_responses=True, max_connections=100
+)
+aiohttp_session: aiohttp.ClientSession = None
+
+MAX_HISTORY = 20
+BASE_RATE_LIMIT = 5
+WELCOME_MESSAGE = "As-salamu alaykum! I'm your memory-backed Gemini bot. What’s your name, akhi?"
+
+# Helper Functions
+def generate_cache_key(chat_id: str, history: list) -> str:
     key_data = json.dumps(history[-3:])
-    hashed_key = hashlib.sha256(key_data.encode("utf-8")).hexdigest()
-    return f"cache:{hashed_key}"
+    hashed = hashlib.sha256(key_data.encode()).hexdigest()
+    return f"cache:{chat_id}:{hashed}"
 
+async def extract_name(history: list) -> str:
+    for msg in reversed(history):
+        content = msg["content"].lower()
+        if any(p in content for p in ["my name is", "i’m", "i am"]):
+            words = content.split()
+            for i, word in enumerate(words):
+                if word in ["is", "i’m", "am"] and i + 1 < len(words):
+                    return words[i + 1].capitalize()
+    return ""
 
-@tenacity.retry(stop=tenacity.stop_after_attempt(3), wait=tenacity.wait_fixed(1))
-async def ask_gemini(history: list) -> str:
-    cache_key = generate_cache_key(history)
-    cached_response = await redis.client.get(cache_key)
-    if cached_response:
-        return cached_response
-    
+async def summarize_history(chat_id: str, history: list) -> str:
+    if len(history) <= 10:
+        return ""
+    summary_input = [{"role": m["role"], "parts": [m["content"]]} for m in history[:-10]]
+    cache_key = f"summary:{chat_id}:{hashlib.sha256(json.dumps(summary_input).encode()).hexdigest()}"
+    cached = await redis_client.get(cache_key)
+    if cached:
+        return cached
     try:
-        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-pro:generateContent"
-        headers = {"Authorization": f"Bearer {os.getenv('GEMINI_API_KEY')}"}
-        data = {"contents": history}
+        summary = await MODEL.generate_content_async([
+            {"role": "user", "parts": [f"Summarize this fast: {json.dumps(summary_input)}"]}
+        ])
+        text = summary.text.strip()
+        await redis_client.setex(cache_key, 86400, text)
+        return text
+    except Exception:
+        return ""
 
-        async with aiohttp_session.post(url, headers=headers, json=data) as response:
-            result = await response.json()
-            response_text = result["text"].strip()
+@tenacity.retry(
+    stop=tenacity.stop_after_attempt(3),
+    wait=tenacity.wait_exponential(multiplier=0.3, min=0.3, max=3),
+)
+async def ask_gemini(chat_id: str, history: list) -> str:
+    last_input = history[-1]['content']
+    global_cache = f"global:{hashlib.sha256(last_input.encode()).hexdigest()}"
+    if (cached := await redis_client.get(global_cache)):
+        return cached
 
-            # Cache response for 1 hour
-            await redis_client.setex(cache_key, 3600, response_text)
-            return response_text
-        
+    cache_key = generate_cache_key(chat_id, history)
+    if (cached := await redis_client.get(cache_key)):
+        return cached
+
+    try:
+        messages = [{"role": m["role"], "parts": [m["content"]]} for m in history[-10:]]
+        name = await redis_client.get(f"name:{chat_id}") or await extract_name(history)
+        if name:
+            await redis_client.setex(f"name:{chat_id}", 86400, name)
+
+        summary = await summarize_history(chat_id, history)
+        if summary:
+            messages.insert(0, {"role": "user", "parts": [f"Summary: {summary}"]})
+
+        start_time = time.time()
+        response = await MODEL.generate_content_async(messages)
+        text = response.text.strip() if response.text else "Couldn’t respond right now, akhi."
+        if name and name not in text:
+            text = f"{name}, {text}"
+        logger.info(f"Gemini responded in {time.time() - start_time:.2f}s for {chat_id}")
+
+        await redis_client.setex(global_cache, 3600, text)
+        await redis_client.setex(cache_key, 180, text)
+        return text
     except Exception as e:
-        logger.error(f"Gemini API error: {e}")
-        return "Xatolik yuz berdi. Iltimos, qayta urinib ko'ring."
+        logger.error(f"Gemini error: {type(e).__name__} - {e}")
+        return "Error happened, akhi. Try again later."
 
-# Get the last messages from Redis  
 async def get_history(chat_id: str) -> list:
-    history = await redis_client.lrange(chat_id, 0, MAX_HISTORY_LENGTH * 2 - 1)
-    return [json.loads(msg) for msg in history]
+    try:
+        data = await redis_client.lrange(chat_id, 0, MAX_HISTORY * 2 - 1)
+        return [json.loads(d) for d in data]
+    except Exception:
+        return []
 
-# Save history to Redis
 async def save_history(chat_id: str, history: list):
-    pipe = redis_client.pipeline()
-    await pipe.delete(chat_id)
-    for item in history[-MAX_HISTORY_LENGTH * 2:]:
-        await pipe.rpush(chat_id, json.dumps(item))
-    await pipe.execute()
+    try:
+        pipe = redis_client.pipeline()
+        await pipe.delete(chat_id)
+        for msg in history[-MAX_HISTORY * 2:]:
+            await pipe.rpush(chat_id, json.dumps(msg))
+        await pipe.execute()
+    except Exception:
+        pass
+
+async def check_rate_limit(chat_id: str) -> bool:
+    global_key = "global_rate"
+    user_key = f"rl:{chat_id}"
+    warn_key = f"warn:{chat_id}"
+
+    active = await redis_client.incr(global_key)
+    await redis_client.expire(global_key, 60)
+
+    limit = max(3, 10 - (active // 10))
+    count = await redis_client.incr(user_key)
+    if count == 1:
+        await redis_client.expire(user_key, 60)
+
+    if count > limit:
+        if not await redis_client.exists(warn_key):
+            await redis_client.setex(warn_key, 60, "1")
+            return True
+        return False
+    return False
+
+async def send_typing(chat_id, context, duration=2):
+    end = time.time() + duration
+    while time.time() < end:
+        try:
+            await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        except TelegramError:
+            break
+        await asyncio.sleep(1.5)
 
 # Handlers
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    for key in [chat_id, f"rl:{chat_id}", f"warn:{chat_id}", f"name:{chat_id}"]:
+        await redis_client.delete(key)
+    await update.message.reply_text(WELCOME_MESSAGE)
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
-    current_time = time.time()
-    rate_limit_key = f"rate_limit:{chat_id}"
+    user_input = update.message.text.strip()
 
-    # Check rate limit
-    last_requests = await redis_client.lrange(rate_limit_key, 0, -1)
-    if len(last_requests) >= RATE_LIMIT:
-        oldest = float(last_requests[-1])
-        if current_time - oldest < 60:
-            return await update.message.reply_text("Juda ko'p so'rov yubordingiz. Iltimos, biroz kuting.")
-   
-    # Track request time
-    await redis_client.lpush(rate_limit_key, current_time)
-    await redis_client.expire(rate_limit_key, 60)
-    await redis_client.ltrim(rate_limit_key, 0, RATE_LIMIT - 1)
+    if await check_rate_limit(chat_id):
+        await update.message.reply_text("Too fast, akhi. Wait a bit.")
+        return
 
-    user_message = update.message.text.strip()
     history = await get_history(chat_id)
+    history.append({"role": "user", "content": user_input})
 
-    # Add user message to history
-    history.append({"role": "user", "content": user_message}) 
+    typing_task = asyncio.create_task(send_typing(chat_id, context))
+    response = await ask_gemini(chat_id, history)
+    typing_task.cancel()
 
-    # Simulate typing delay
-    typing_delay = min(len(user_message) * 0.01, 2.0)
-    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
- 
+    history.append({"role": "assistant", "content": response})
+    await save_history(chat_id, history)
+
+    try:
+        if len(response) > 4096:
+            for i in range(0, len(response), 4096):
+                await update.message.reply_text(response[i:i + 4096])
+                await asyncio.sleep(0.05)  # Add slight delay for Telegram
+        else:
+            await update.message.reply_text(response)
+    except TelegramError:
+        await update.message.reply_text("Message too long to send, akhi.")
+
+# Lifecycle
+async def on_startup(app: Application):
+    global aiohttp_session
+    aiohttp_session = aiohttp.ClientSession()
+    try:
+        await redis_client.ping()
+        logger.info(f"Connected to Redis at {REDIS_URL}")
+    except Exception:
+        logger.warning("Redis connection failed!")
+    logger.info("Bot is running...")
+
+async def on_shutdown(app: Application):
+    if aiohttp_session:
+        await aiohttp_session.close()
+    await redis_client.close()
+    logger.info("Bot shutdown complete.")
+
+# Main
+def main():
+    logger.info("Starting bot...")
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    app.post_init = on_startup
+    app.post_shutdown = on_shutdown
+
+    if os.getenv("HEROKU_APP_NAME"):
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=TELEGRAM_TOKEN,
+            webhook_url=f"https://{os.getenv('HEROKU_APP_NAME')}.herokuapp.com/{TELEGRAM_TOKEN}"
+        )
+    else:
+        app.run_polling()
+
+if __name__ == "__main__":
+    main()
