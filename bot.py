@@ -21,10 +21,22 @@ logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=lo
 logger = logging.getLogger(__name__)
 
 # Config—locked and loaded
-GEMINI_KEY = os.getenv("GEMINI_API_KEY") or exit("Bro, set GEMINI_API_KEY!")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or exit("Bro, set TELEGRAM_BOT_TOKEN!")
+GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 PORT = int(os.getenv("PORT", 8443))
+
+# Validate env vars with a retry
+for _ in range(3):  # Retry 3 times, 2s delay
+    if GEMINI_KEY and TELEGRAM_TOKEN:
+        break
+    logger.warning("Missing GEMINI_API_KEY or TELEGRAM_BOT_TOKEN—retrying...")
+    time.sleep(2)
+    GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+    TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+else:
+    logger.error("Failed to load GEMINI_API_KEY or TELEGRAM_BOT_TOKEN—bot will crash!")
+    exit("Bro, set GEMINI_API_KEY and TELEGRAM_BOT_TOKEN!")
 
 # Gemini—straight fire
 genai.configure(api_key=GEMINI_KEY)
@@ -199,15 +211,12 @@ def main():
     app.post_init = on_startup
     app.post_shutdown = on_shutdown
 
-    if heroku_app := os.getenv("HEROKU_APP_NAME"):
-        app.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            url_path=TELEGRAM_TOKEN,
-            webhook_url=f"https://{heroku_app}.herokuapp.com/{TELEGRAM_TOKEN}"
-        )
-    else:
-        app.run_polling()
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=TELEGRAM_TOKEN,
+        webhook_url=f"https://web-production-cf21.up.railway.app/{TELEGRAM_TOKEN}"
+    )
 
 if __name__ == "__main__":
     main()
