@@ -1,53 +1,66 @@
-# 🤖 Gemini-Powered Telegram Bot
+# 🤖 Gemini Telegram Bot
 
-A feature-rich Telegram bot powered by Google's Gemini 2.0 Flash API with memory and rich text formatting.
+A fast, friendly AI chatbot built with [Google Gemini 2 Flash](https://ai.google.dev) and `python-telegram-bot`.  
+No database needed. HTML answers. Works like a memory bot.
+
+> ⚡ Built for easy deployment on [Railway](https://railway.app) or any Python server!
+
+---
 
 ## ✨ Features
 
-- 🧠 **Conversation Memory** - Remembers chat history and context
-- 💬 **Rich Text Formatting** - Supports bold, italic, underline, and emojis
-- 🚀 **Fast Response Times** - Optimized for quick replies
-- 💾 **Redis Caching** - Efficient response caching to reduce API usage
-- ⚡ **Rate Limiting** - Protects against spam and excessive usage
-- 🔄 **Error Handling** - Robust retry mechanisms and error recovery
-- 🌐 **24/7 Deployment** - Ready for continuous operation on Railway
+- 💬 Telegram bot with persistent per-user memory (in RAM)
+- 🤖 Google Gemini Flash AI integration
+- 🧠 Stores chat history for better replies
+- 🧾 HTML responses with bold/italic/emoji
+- ⚙️ Easy config via `.env` file
+- 🚀 No Redis or database needed (deploy anywhere)
 
-## 🛠️ Setup
+---
 
-### Prerequisites
+## 🧱 Tech Stack
 
-- Python 3.9+
-- Redis server
-- Google Gemini API Token
+| Tech               | Purpose                          |
+|--------------------|----------------------------------|
+| `python-telegram-bot` | Telegram Bot API client         |
+| `google-generativeai` | Gemini 2.0 Flash AI model       |
+| `tenacity`         | Retry handling for Gemini        |
+| `dotenv`           | Config from `.env` file          |
+| `asyncio`          | Fast async message handling      |
 
-### Environment Variables
+---
 
-Create a `.env` file with the following variables:
+## 🚀 Quickstart (Local)
 
+### 1. 🔑 Setup `.env`
+
+Create a `.env` file:
+
+```env
+TELEGRAM_BOT_TOKEN=your-telegram-token-here
+GEMINI_API_KEY=your-gemini-api-key-here
 ```
-GEMINI_API_KEY=your_gemini_api_key
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-REDIS_URL=your_redis_url (optional, defaults to localhost)
+
+### 2. 📦 Install Dependencies
+
+```bash
+pip install -r requirements.txt
 ```
 
-### Installation
+### 3. 🚀 Run the Bot
 
-1. Clone the repository
-2. Install dependencies: `pip install -r requirements.txt`
-3. Run the bot locally: `python bot_fixed.py`
+```bash
+python bot.py
+```
 
-> **Note:** We've created a fixed version (`bot_fixed.py`) that uses python-telegram-bot v13.15 for better compatibility. The requirements.txt has been updated accordingly.
-
-## 🚀 Deployment
-
-### Railway Deployment
-
-This bot is configured for deployment on [Railway](https://railway.app/):
+### 4. 📱 Deploy to Railway
 
 1. Create a new Railway project
 2. Connect your GitHub repository
 3. Add the required environment variables
 4. Deploy and set up the webhook
+
+---
 
 ## 📝 License
 
