@@ -1,141 +1,189 @@
-from dotenv import load_dotenv
-load_dotenv()
-
 import os
-import logging
-import time
-import json
-import hashlib
+import re
 import asyncio
-import aiohttp
+import logging
+import tempfile
+from io import BytesIO
+from dotenv import load_dotenv
 from telegram import Update
+from telegram.constants import ChatAction, ParseMode
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler, ContextTypes, filters
+    Application, CommandHandler, MessageHandler,
+    ContextTypes, filters
 )
 import google.generativeai as genai
-import tenacity
-from telegram.error import TelegramError
+import httpx
 
-# Logging
-logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
+# ─── 🔐 Load Environment Variables ─────────────────────────────
+load_dotenv()
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+SERPER_KEY = os.getenv("SERPER_API_KEY")
+
+# ─── 🤖 Gemini Setup ───────────────────────────────────────────
+genai.configure(api_key=GEMINI_KEY)
+model = genai.GenerativeModel("gemini-2.5-flash")
+
+# ─── 🧠 Memory ─────────────────────────────────────────────────
+user_history = {}
+MAX_HISTORY = 20
+
+# ─── 📝 Logging ────────────────────────────────────────────────
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# Environment
-GEMINI_KEY = os.getenv("GEMINI_API_KEY")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-PORT = int(os.getenv("PORT", 8443))
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://your-production-url.up.railway.app")
+# ─── 👋 Welcome Message ────────────────────────────────────────
+WELCOME = (
+    "<b>👋 Assalomu alaykum!</b>\n"
+    "Men <b>Gemini</b> 🤖 — Google AI kuchi bilan ishlayman!\n\n"
+    "💬 Xabar yozing\n📷 Rasm yuboring\n🎙️ Ovozingizni yuboring\n"
+    "🔍 <code>/search</code> orqali internetdan ma’lumot oling\n\n"
+    "Do‘stona, samimiy va foydali suhbat uchun shu yerdaman! 🚀"
+)
 
-# Validate keys
-for _ in range(3):
-    if GEMINI_KEY and TELEGRAM_TOKEN:
-        break
-    logger.warning("Missing GEMINI_API_KEY or TELEGRAM_BOT_TOKEN — retrying...")
-    time.sleep(2)
-    GEMINI_KEY = os.getenv("GEMINI_API_KEY")
-    TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-else:
-    logger.error("Missing GEMINI_API_KEY or TELEGRAM_BOT_TOKEN")
-    exit("Set .env values correctly")
-
-# Setup
-genai.configure(api_key=GEMINI_KEY)
-MODEL = genai.GenerativeModel("gemini-2.0-flash")
-
-MAX_HISTORY = 20
-WELCOME_MESSAGE = "<b>Yo, bro!</b> 👋 I'm your <i>Gemini bot</i> with <u>killer memory</u>. What's your name?"
-
-user_history = {}
-
-async def extract_name(history: list) -> str:
-    for msg in reversed(history):
-        content = msg["content"].lower()
-        if any(phrase in content for phrase in ["my name is", "i’m", "i am"]):
-            words = content.split()
-            for i, word in enumerate(words):
-                if word in ["is", "i’m", "am"] and i + 1 < len(words):
-                    return words[i + 1].capitalize()
-    return ""
-
-@tenacity.retry(stop=tenacity.stop_after_attempt(3), wait=tenacity.wait_exponential(min=0.3))
-async def ask_gemini(chat_id: str, history: list) -> str:
+# ─── 📦 Utilities ──────────────────────────────────────────────
+async def send_typing(update: Update):
     try:
-        # Prepare messages in correct Gemini format
-        messages = [{"role": msg["role"], "parts": [msg["content"]]} for msg in history[-10:]]
-        
-        # Insert style instruction as user message (not system)
-        messages.insert(0, {
-            "role": "user",
-            "parts": ["You're a friendly assistant. Use HTML tags like <b>, <i>, <u>, and emojis in your answers."]
-        })
+        await update.message.chat.send_action(action=ChatAction.TYPING)
+    except:
+        pass
 
-        response = await MODEL.generate_content_async(messages)
-        text = response.text.strip() or "<b>Gemini's speechless, bro.</b>"
-        return text
-    except Exception as e:
-        logger.error(f"Gemini error: {e}")
-        return "<b>Gemini failed, bro 😟</b>"
+def clean_html(text: str) -> str:
+    return re.sub(r'</?(ul|li|div|span|h\d|blockquote|table|tr|td|th)[^>]*>', '', text)
 
-
-async def send_long_message(update: Update, text: str, parse_mode="HTML"):
-    if len(text) <= 4096:
-        await update.message.reply_text(text, parse_mode=parse_mode)
-        return
-    chunks = [text[i:i+4096] for i in range(0, len(text), 4096)]
-    for chunk in chunks:
-        await update.message.reply_text(chunk, parse_mode=parse_mode)
+async def send_long_message(update: Update, text: str):
+    text = clean_html(text)
+    for i in range(0, len(text), 4096):
+        await update.message.reply_text(text[i:i+4096], parse_mode=ParseMode.HTML)
         await asyncio.sleep(0.1)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = str(update.effective_chat.id)
-    user_history[chat_id] = []
-    await update.message.reply_text(WELCOME_MESSAGE, parse_mode="HTML")
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("""<b>Gemini Bot Commands</b>
-
-/start - Restart the bot
-/help - Show help
-/status - Bot status
-/clear - Clear history
-
-<i>Just message me and I’ll reply with memory!</i>""", parse_mode="HTML")
-
-async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = str(update.effective_chat.id)
-    user_history.pop(chat_id, None)
-    await update.message.reply_text("<b>Memory cleared.</b>", parse_mode="HTML")
-
-async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ─── 🔍 Search Integration ─────────────────────────────────────
+async def search_web(query: str) -> str:
     try:
-        start_time = time.time()
-        _ = await MODEL.generate_content_async([{"role": "user", "parts": ["Hello"]}])
-        latency = time.time() - start_time
-        await update.message.reply_text(
-            f"<b>Status:</b> \nGemini latency: {latency:.2f}s", parse_mode="HTML")
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://google.serper.dev/search",
+                headers={"X-API-KEY": SERPER_KEY, "Content-Type": "application/json"},
+                json={"q": query}
+            )
+            data = response.json()
+            if "organic" in data and data["organic"]:
+                top = data["organic"][0]
+                title = top.get("title", "No title")
+                snippet = top.get("snippet", "No snippet")
+                link = top.get("link", "")
+                return f"<b>{title}</b>\n{snippet}\n<a href='{link}'>🔗 Havola</a>"
+            else:
+                return "⚠️ Hech narsa topilmadi."
     except Exception as e:
-        await update.message.reply_text(f"<b>Status check failed:</b>\n{e}", parse_mode="HTML")
+        logger.error(f"Search error: {e}")
+        return "❌ Qidiruvda xatolik yuz berdi."
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ─── 🧠 Gemini Reply Engine ────────────────────────────────────
+async def ask_gemini(history):
+    try:
+        messages = [{"role": msg["role"], "parts": [msg["content"]]} for msg in history[-10:]]
+        messages.insert(0, {
+            "role": "user", "parts": [
+                "You are a smart friend. Don’t repeat what the user said. Reply casually with humor and warmth 😊. "
+                "Awesomely answer with formatting <b>, <i>, <u> and emojis 🧠. Answer in Uzbek if the user speaks Uzbek. Otherwise use appropriate language."
+            ]
+        })
+        response = await model.generate_content_async(messages)
+        return response.text.strip()
+    except Exception as e:
+        logger.error(f"Gemini error: {e}")
+        return "<i>⚠️ Gemini hozircha javob bera olmadi.</i>"
+
+# ─── 📌 Handlers ───────────────────────────────────────────────
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_history[str(update.effective_chat.id)] = []
+    await update.message.reply_text(WELCOME, parse_mode=ParseMode.HTML)
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await send_typing(update)
     chat_id = str(update.effective_chat.id)
-    text = update.message.text.strip()
-    history = user_history.get(chat_id, [])
-    history.append({"role": "user", "content": text})
-    response = await ask_gemini(chat_id, history)
-    history.append({"role": "assistant", "content": response})
-    user_history[chat_id] = history[-MAX_HISTORY * 2:]
-    await send_long_message(update, response)
+    message = update.message.text.strip()
 
-# App
+    # Slash-based search
+    if message.lower().startswith("/search"):
+        parts = message.split(" ", 1)
+        if len(parts) == 2:
+            query = parts[1].strip()
+            result = await search_web(query)
+            await send_long_message(update, f"<b>🔎 Qidiruv natijasi:</b>\n{result}")
+        else:
+            await update.message.reply_text("❓ Qidiruv so‘zini yozing. Masalan: <code>/search Ibn Sina</code>", parse_mode=ParseMode.HTML)
+        return
+
+    # Gemini chat
+    history = user_history.setdefault(chat_id, [])
+    history.append({"role": "user", "content": message})
+    reply = await ask_gemini(history)
+    history.append({"role": "model", "content": reply})
+    user_history[chat_id] = history[-MAX_HISTORY * 2:]
+    await send_long_message(update, reply)
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await send_typing(update)
+    file = await context.bot.get_file(update.message.photo[-1].file_id)
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
+        await file.download_to_drive(custom_path=tmp_file.name)
+        tmp_path = tmp_file.name
+
+    try:
+        uploaded = genai.upload_file(tmp_path)
+        response = model.generate_content([
+            {"role": "user", "parts": [
+                "The user sent a photo. Analyze in detail and react like a friend who saw it and gives a warm, friendly and useful reply. No robotic descriptions. Use emojis and formatting awesomely."
+            ]},
+            {"role": "user", "parts": [uploaded]}
+        ])
+        reply = response.text.strip()
+        chat_id = str(update.effective_chat.id)
+        user_history.setdefault(chat_id, []).append({"role": "user", "content": "[sent photo 📸]"})
+        user_history[chat_id].append({"role": "model", "content": reply})
+        await send_long_message(update, reply)
+    finally:
+        os.remove(tmp_path)
+
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await send_typing(update)
+    voice = update.message.voice or update.message.audio
+    file = await context.bot.get_file(voice.file_id)
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".oga") as tmp_file:
+        await file.download_to_drive(custom_path=tmp_file.name)
+        tmp_path = tmp_file.name
+
+    try:
+        uploaded = genai.upload_file(tmp_path)
+        response = model.generate_content([
+            {"role": "user", "parts": [
+                "The user sent a voice message. Understand and reply like you're talking back — not transcribing. Just continue the conversation warmly. Use Emojis + <i>/<b>/<u> formatting awesomely."
+            ]},
+            {"role": "user", "parts": [uploaded]}
+        ])
+        reply = response.text.strip()
+        chat_id = str(update.effective_chat.id)
+        user_history.setdefault(chat_id, []).append({"role": "user", "content": "[sent voice 🎙️]"})
+        user_history[chat_id].append({"role": "model", "content": reply})
+        await send_long_message(update, reply)
+    finally:
+        os.remove(tmp_path)
+
+# ─── 🚀 Start Bot ──────────────────────────────────────────────
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("status", status_command))
-    app.add_handler(CommandHandler("clear", clear_history))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    logger.info("Gemini Bot is up!")
+    app.add_handler(CommandHandler("search", handle_text))  # <- Slash search
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
+    logger.info("🤖 Gemini SmartBot is now LIVE and listening!")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
