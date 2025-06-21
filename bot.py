@@ -13,6 +13,7 @@ from telegram.ext import (
 )
 import google.generativeai as genai
 import httpx
+from telegram import ReplyKeyboardMarkup, KeyboardButton
 
 # ─── 🔐 Load Environment Variables ─────────────────────────────
 load_dotenv()
@@ -40,6 +41,17 @@ WELCOME = (
     "🔍 <code>/search</code> orqali internetdan ma’lumot oling\n\n"
     "Do‘stona, samimiy va foydali suhbat uchun shu yerdaman! 🚀"
 )
+
+# ─── 📋 Main Menu Keyboard ────────────────────────────────────
+def main_menu_keyboard():
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("/start"), KeyboardButton("/help")],
+            [KeyboardButton("/search something")]
+        ],
+        resize_keyboard=True
+    )
+
 
 # ─── 📦 Utilities ──────────────────────────────────────────────
 async def send_typing(update: Update):
@@ -98,7 +110,24 @@ async def ask_gemini(history):
 # ─── 📌 Handlers ───────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_history[str(update.effective_chat.id)] = []
-    await update.message.reply_text(WELCOME, parse_mode=ParseMode.HTML)
+    await update.message.reply_text(
+        WELCOME,
+        parse_mode=ParseMode.HTML,
+        reply_markup=main_menu_keyboard()
+    )
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_text = (
+        "<b>🤖 Gemini SmartBot yordam menyusi</b>\n\n"
+        "🟢 <b>/start</b> — Botni qayta ishga tushirish\n"
+        "🟢 <b>/help</b> — Yordam va buyruqlar roʻyxati\n"
+        "🟢 <b>/search [so'z]</b> — Internetdan qidiruv (Google orqali)\n\n"
+        "💬 Oddiy xabar yuboring — men siz bilan suhbatlashaman!\n"
+        "📷 Rasm yuboring — uni tahlil qilaman!\n"
+        "🎙️ Ovoz yuboring — suhbatni davom ettiraman!\n\n"
+        "🚀 Juda aqlli, samimiy va foydali yordamchi bo'lishga harakat qilaman!"
+    )
+    await update.message.reply_text(help_text, parse_mode=ParseMode.HTML, reply_markup=main_menu_keyboard())
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_typing(update)
@@ -177,7 +206,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("search", handle_text))  # <- Slash search
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("search", handle_text))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
