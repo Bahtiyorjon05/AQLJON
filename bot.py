@@ -14,6 +14,8 @@ from telegram.ext import (
 import google.generativeai as genai
 import httpx
 from telegram import ReplyKeyboardMarkup, KeyboardButton
+from telegram import ReplyKeyboardRemove
+
 
 # ─── 🔐 Load Environment Variables ─────────────────────────────
 load_dotenv()
@@ -47,7 +49,7 @@ def main_menu_keyboard():
     return ReplyKeyboardMarkup(
         [
             [KeyboardButton("/start"), KeyboardButton("/help")],
-            [KeyboardButton("/search something")]
+            [KeyboardButton("/search")]
         ],
         resize_keyboard=True
     )
@@ -124,13 +126,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🟢 <b>/search [so'z]</b> — Internetdan qidiruv (Google orqali)\n\n"
         "💬 Oddiy xabar yuboring — men siz bilan suhbatlashaman!\n"
         "📷 Rasm yuboring — uni tahlil qilaman!\n"
-        "🎙️ Ovoz yuboring — suhbatni davom ettiraman!\n\n"
+        "🎙️ Ovoz yuboring — munosib va chiroyli javob beraman!\n\n"
         "🚀 Juda aqlli, samimiy va foydali yordamchi bo'lishga harakat qilaman!"
     )
     await update.message.reply_text(help_text, parse_mode=ParseMode.HTML, reply_markup=main_menu_keyboard())
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_typing(update)
+    await update.message.reply_text("💬 Davom etamiz...", reply_markup=ReplyKeyboardRemove())
     chat_id = str(update.effective_chat.id)
     message = update.message.text.strip()
 
