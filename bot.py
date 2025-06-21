@@ -14,7 +14,6 @@ from telegram.ext import (
 import google.generativeai as genai
 import httpx
 from telegram import ReplyKeyboardMarkup, KeyboardButton
-from telegram import ReplyKeyboardRemove
 
 
 # ─── 🔐 Load Environment Variables ─────────────────────────────
@@ -37,8 +36,8 @@ logger = logging.getLogger(__name__)
 
 # ─── 👋 Welcome Message ────────────────────────────────────────
 WELCOME = (
-    "<b>👋 Assalomu alaykum!</b>\n"
-    "Men <b>Gemini</b> 🤖 — Google AI kuchi bilan ishlayman!\n\n"
+    "<b>👋 Assalomu alaykum va rohmatulloh va barokatuh!</b>\n"
+    "Men <b>Gemini</b> 🤖 — Googlening aqqli modellaridan biriman!\n\n"
     "💬 Xabar yozing\n📷 Rasm yuboring\n🎙️ Ovozingizni yuboring\n"
     "🔍 <code>/search</code> orqali internetdan ma’lumot oling\n\n"
     "Do‘stona, samimiy va foydali suhbat uchun shu yerdaman! 🚀"
@@ -51,7 +50,7 @@ def main_menu_keyboard():
             [KeyboardButton("/start"), KeyboardButton("/help")],
             [KeyboardButton("/search")]
         ],
-        resize_keyboard=True
+        resize_keyboard=True, one_time_keyboard=True,
     )
 
 
@@ -120,7 +119,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
-        "<b>🤖 Gemini SmartBot yordam menyusi</b>\n\n"
+        "<b>🤖 Gemini yordam menyusi</b>\n\n"
         "🟢 <b>/start</b> — Botni qayta ishga tushirish\n"
         "🟢 <b>/help</b> — Yordam va buyruqlar roʻyxati\n"
         "🟢 <b>/search [so'z]</b> — Internetdan qidiruv (Google orqali)\n\n"
@@ -133,7 +132,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_typing(update)
-    await update.message.reply_text("💬 Davom etamiz...", reply_markup=ReplyKeyboardRemove())
     chat_id = str(update.effective_chat.id)
     message = update.message.text.strip()
 
