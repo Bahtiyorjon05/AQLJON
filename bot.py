@@ -29,6 +29,7 @@ model = genai.GenerativeModel("gemini-2.5-flash")
 # ─── 🧠 Enhanced Memory ─────────────────────────────────────────────────
 user_history = {}
 user_content_memory = {}  # Store document/audio content for later reference
+user_stats = {}  # Track detailed user statistics
 MAX_HISTORY = 20
 MAX_CONTENT_MEMORY = 50  # Store more content items
 
@@ -95,6 +96,22 @@ async def search_web(query: str) -> str:
     except Exception as e:
         logger.error(f"Search error: {e}")
         return "❌ Qidiruvda xatolik yuz berdi."
+
+# ─── 📊 User Statistics Tracking ─────────────────────────────────────────────────
+def track_user_activity(chat_id: str, activity_type: str):
+    """Track user activity for statistics"""
+    if chat_id not in user_stats:
+        user_stats[chat_id] = {
+            "messages": 0,
+            "photos": 0,
+            "voice_audio": 0,
+            "documents": 0,
+            "first_interaction": "today",
+            "last_active": "now"
+        }
+    
+    user_stats[chat_id][activity_type] += 1
+    user_stats[chat_id]["last_active"] = "now"
 
 # ─── 🧠 Memory Management Functions ─────────────────────────────────────────────────
 def store_content_memory(chat_id: str, content_type: str, content_summary: str, file_name: str = None):
@@ -205,6 +222,9 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply = response.text.strip() if response.text else "❌ Hujjatni tahlil qila olmadim."
             
             chat_id = str(update.effective_chat.id)
+            
+            # Track document activity
+            track_user_activity(chat_id, "documents")
             
             # Store document content in memory for future reference
             store_content_memory(chat_id, "document", reply, document.file_name)
@@ -380,6 +400,63 @@ async def send_update_broadcast(update: Update, context: ContextTypes.DEFAULT_TY
     
     await update.message.reply_text(result_text, parse_mode=ParseMode.HTML)
 
+# ─── 📊 Admin Statistics Command ─────────────────────────────────
+async def admin_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show comprehensive bot statistics (admin only)."""
+    if not update.message or not update.effective_chat:
+        return
+    
+    # Check if user is admin
+    admin_ids = ["7050582441"]  # Replace with your actual Telegram ID
+    user_id = str(update.effective_user.id)
+    
+    if user_id not in admin_ids:
+        await update.message.reply_text("❌ Bu buyruq faqat admin uchun!")
+        return
+    
+    # Calculate comprehensive statistics
+    total_users = len(user_history)
+    total_messages = sum(len(history) for history in user_history.values())
+    
+    # Count media types from user_stats
+    total_photos = sum(stats.get("photos", 0) for stats in user_stats.values())
+    total_voice_audio = sum(stats.get("voice_audio", 0) for stats in user_stats.values())
+    total_documents = sum(stats.get("documents", 0) for stats in user_stats.values())
+    
+    # Count content memories
+    total_content_memories = sum(len(memories) for memories in user_content_memory.values())
+    
+    # Most active users (top 5)
+    user_activity = []
+    for chat_id, history in user_history.items():
+        user_messages = len([m for m in history if m["role"] == "user"])
+        if user_messages > 0:
+            user_activity.append((chat_id, user_messages))
+    
+    user_activity.sort(key=lambda x: x[1], reverse=True)
+    top_users = user_activity[:5]
+    
+    # Build statistics message
+    stats_text = (
+        f"<b>🤖 ADMIN BOT STATISTICS</b>\n\n"
+        f"👥 <b>Total Users:</b> {total_users}\n"
+        f"💬 <b>Total Messages:</b> {total_messages}\n\n"
+        f"<b>📁 Media Statistics:</b>\n"
+        f"📷 Photos: <b>{total_photos}</b>\n"
+        f"🎙️ Voice/Audio: <b>{total_voice_audio}</b>\n"
+        f"📄 Documents: <b>{total_documents}</b>\n\n"
+        f"🧠 <b>Content Memories:</b> {total_content_memories}\n\n"
+    )
+    
+    if top_users:
+        stats_text += "<b>🏆 Most Active Users:</b>\n"
+        for i, (chat_id, msg_count) in enumerate(top_users, 1):
+            stats_text += f"{i}. User {chat_id[-6:]}: <b>{msg_count}</b> messages\n"
+    
+    stats_text += "\n<i>🔥 Bot is running smoothly!</i>"
+    
+    await update.message.reply_text(stats_text, parse_mode=ParseMode.HTML)
+
 # ─── 📌 Handlers ───────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_history[str(update.effective_chat.id)] = []
@@ -402,6 +479,19 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📄 Hujjat yuboring — tahlil qilib xulosa beraman!\n\n"
         "🚀 Juda aqlli, samimiy va foydali yordamchi bo'lishga harakat qilaman!"
     )
+    
+    # Check if user is admin and add admin commands to help
+    admin_ids = ["7050582441"]  # Replace with your actual Telegram ID
+    user_id = str(update.effective_user.id)
+    
+    if user_id in admin_ids:
+        help_text += (
+            "\n\n<b>🔧 Admin Commands:</b>\n"
+            "🟢 <b>/broadcast [message]</b> — Send message to all users\n"
+            "🟢 <b>/update</b> — Send update notification to all users\n"
+            "🟢 <b>/adminstats</b> — View comprehensive bot statistics"
+        )
+    
     await update.message.reply_text(help_text, parse_mode=ParseMode.HTML, reply_markup=main_menu_keyboard())
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -428,6 +518,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Gemini chat with memory context
     history = user_history.setdefault(chat_id, [])
     history.append({"role": "user", "content": message})
+    
+    # Track user activity
+    track_user_activity(chat_id, "messages")
+    
     reply = await ask_gemini(history, chat_id)  # Pass chat_id for memory context
     history.append({"role": "model", "content": reply})
     user_history[chat_id] = history[-MAX_HISTORY * 2:]
@@ -451,6 +545,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
         reply = response.text.strip()
         chat_id = str(update.effective_chat.id)
+        
+        # Track photo activity
+        track_user_activity(chat_id, "photos")
         
         # Store photo analysis in memory for future reference
         store_content_memory(chat_id, "photo", reply)
@@ -481,6 +578,9 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply = response.text.strip()
         chat_id = str(update.effective_chat.id)
         
+        # Track voice/audio activity
+        track_user_activity(chat_id, "voice_audio")
+        
         # Store audio content in memory for future reference
         store_content_memory(chat_id, "audio", reply)
         
@@ -498,6 +598,7 @@ def main():
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))  # Admin broadcast
     app.add_handler(CommandHandler("update", send_update_broadcast))  # Quick update broadcast
+    app.add_handler(CommandHandler("adminstats", admin_stats_command))  # Admin statistics
     app.add_handler(CommandHandler("search", handle_text))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
