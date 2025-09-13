@@ -1,15 +1,9 @@
 # Core AI and Bot Framework
 google-generativeai==0.8.3
-python-telegram-bot==22.1
+python-telegram-bot[job-queue]==22.1
 python-dotenv==1.0.0
 
 # HTTP Client Libraries
 httpx==0.28.1
 requests==2.31.0
 aiohttp==3.9.1
-
-# Retry Logic and Error Handling
-tenacity==9.0.0
-
-# Image Processing
-Pillow==10.2.0
