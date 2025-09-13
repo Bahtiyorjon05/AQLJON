@@ -50,11 +50,13 @@ logger = logging.getLogger(__name__)
 # ─── 👋 Welcome Message ────────────────────────────────────────
 WELCOME = (
     "<b>👋 Assalomu alaykum va rohmatulloh va barokatuh!</b>\n"
-    "Men <b>AQLJON</b> 🤖 — sizning doimiy hamrohingizman!\n\n"
+    "Men <b>AQLJON</b> ✨ — sizning doimiy hamrohingizman!\n\n"
     "💬 Xabar yozing\n📷 Rasm yuboring\n🎙️ Ovozingizni yuboring\n"
     "📄 Hujjat yuboring\n🎬 Video yuboring\n"
     "🔍 <code>/search</code> orqali internetdan ma'lumot oling\n"
-    "📊 <code>/stats</code> — Statistikani ko'ring\n\n"
+    "📊 <code>/stats</code> — Statistikani ko'ring\n"
+    "📞 <code>/contact</code> — Admin bilan bog'laning\n"
+    "ℹ️ <code>/help</code> — Yordam oling\n\n"
     "Do'stona, samimiy va foydali suhbat uchun shu yerdaman! 🚀"
 )
 
@@ -62,8 +64,9 @@ WELCOME = (
 def main_menu_keyboard():
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("/start"), KeyboardButton("/help")],
-            [KeyboardButton("/search"), KeyboardButton("/stats")]
+            [KeyboardButton("🔄 Qayta ishga tushirish"), KeyboardButton("ℹ️ Yordam")],
+            [KeyboardButton("🔍 Qidiruv"), KeyboardButton("📊 Statistika")],
+            [KeyboardButton("📞 Kontakt")]
         ],
         resize_keyboard=True, one_time_keyboard=True,
     )
@@ -72,6 +75,8 @@ def main_menu_keyboard():
 # ─── 🛡️ Safe Communication Functions ──────────────────────────────────────
 async def safe_reply(update: Update, text: str, parse_mode=ParseMode.HTML, max_retries=3):
     """Safely send reply with automatic retry and fallback"""
+    if not update or not update.message:
+        return False
     for attempt in range(max_retries):
         try:
             await update.message.reply_text(text, parse_mode=parse_mode)
@@ -84,6 +89,7 @@ async def safe_reply(update: Update, text: str, parse_mode=ParseMode.HTML, max_r
             logger.warning(f"Telegram error on attempt {attempt + 1}: {e}")
             if attempt < max_retries - 1:
                 await asyncio.sleep(2 ** attempt)  # Exponential backoff
+
             else:
                 # Final attempt with plain text
                 try:
@@ -118,6 +124,8 @@ async def safe_edit_message(message, text: str, parse_mode=ParseMode.HTML, max_r
 
 # ─── 📦 Utilities ──────────────────────────────────────────────
 async def send_typing(update: Update):
+    if not update or not update.message or not update.message.chat:
+        return
     try:
         await update.message.chat.send_action(action=ChatAction.TYPING)
     except (NetworkError, TelegramError, TimedOut) as e:
@@ -129,6 +137,8 @@ def clean_html(text: str) -> str:
     return re.sub(r'</?(ul|li|div|span|h\d|blockquote|table|tr|td|th)[^>]*>', '', text)
 
 async def send_long_message(update: Update, text: str):
+    if not update or not update.message:
+        return
     text = clean_html(text)
     for i in range(0, len(text), 4096):
         try:
@@ -157,10 +167,13 @@ async def send_long_message(update: Update, text: str):
 # ─── 🔍 Search Integration ─────────────────────────────────────
 async def search_web(query: str) -> str:
     try:
+        # Check if SERPER_KEY is available
+        if not SERPER_KEY:
+            return "❌ Qidiruv xizmati sozlanmagan."
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 "https://google.serper.dev/search",
-                headers={"X-API-KEY": SERPER_KEY, "Content-Type": "application/json"},
+                headers={"X-API-KEY": str(SERPER_KEY), "Content-Type": "application/json"},
                 json={"q": query}
             )
             data = response.json()
@@ -249,7 +262,7 @@ def check_memory_limits():
             
             logger.info(f"Removed {to_remove} oldest users to maintain memory limits")
 
-def track_user_activity(chat_id: str, activity_type: str, update: Update = None):
+def track_user_activity(chat_id: str, activity_type: str, update: Update | None = None):
     """Track user activity for statistics with daily analytics"""
     # Check memory limits before adding new users
     if chat_id not in user_stats:
@@ -301,7 +314,7 @@ def track_user_activity(chat_id: str, activity_type: str, update: Update = None)
         }
 
 # ─── 🧠 Memory Management Functions ─────────────────────────────────────────────────
-def store_content_memory(chat_id: str, content_type: str, content_summary: str, file_name: str = None):
+def store_content_memory(chat_id: str, content_type: str, content_summary: str, file_name: str | None = None):
     """Store document/audio content for future reference"""
     if chat_id not in user_content_memory:
         user_content_memory[chat_id] = []
@@ -309,7 +322,7 @@ def store_content_memory(chat_id: str, content_type: str, content_summary: str, 
     memory_item = {
         "type": content_type,
         "summary": content_summary,
-        "file_name": file_name,
+        "file_name": file_name if file_name else "unknown",
         "timestamp": "just now"
     }
     
@@ -340,7 +353,7 @@ def get_content_context(chat_id: str) -> str:
     return ""
 
 # ─── 🧠 Enhanced Gemini Reply Engine ────────────────────────────────────
-async def ask_gemini(history, chat_id: str = None, max_retries=3):
+async def ask_gemini(history, chat_id: str | None = None, max_retries=3):
     for attempt in range(max_retries):
         try:
             messages = [{"role": msg["role"], "parts": [msg["content"]]} for msg in history[-10:]]
@@ -350,7 +363,7 @@ async def ask_gemini(history, chat_id: str = None, max_retries=3):
             
             base_instruction = (
                 "You are a smart friend. Remember your name is AQLJON . Don't repeat what the user said. Reply casually with humor and warmth 😊. "
-                "Awesomely answer with formatting <b>, <i>, <u> and emojis 🧠. Answer in Uzbek if the user speaks Uzbek. Otherwise use appropriate language."
+                "Awesomely answer with formatting <b>, <i>, <u> and emojis 🧠. Be warm, creative, helpful, friendly! Answer in Uzbek if the user speaks Uzbek. Otherwise use appropriate language."
             )
             
             # Add content context to instruction if available
@@ -365,7 +378,7 @@ async def ask_gemini(history, chat_id: str = None, max_retries=3):
                 asyncio.to_thread(lambda: model.generate_content(messages)),
                 timeout=45  # Increased timeout
             )
-            return response.text.strip()
+            return response.text.strip() if response and response.text else ""
             
         except asyncio.TimeoutError:
             logger.warning(f"Gemini timeout on attempt {attempt + 1}")
@@ -389,93 +402,160 @@ async def ask_gemini(history, chat_id: str = None, max_retries=3):
 
 # ─── 📄 Enhanced Document Analysis ─────────────────────────────────────
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle document uploads and analysis."""
-    try:
-        if not update.message or not update.message.document:
-            return
-            
-        await send_typing(update)
-        document: Document = update.message.document
+    """Handle document uploads and analysis with non-blocking processing."""
+    if not update or not update.message or not update.message.document:
+        return
         
-        # Send analyzing message
-        analyzing_msg = await safe_reply(update, 
-            "📄 <b>Hujjat qabul qilindi!</b>\n\n"
-            "⏳ <i>Tahlil qilinmoqda... Boshqa savollaringizni yuboring!</i>",
-            parse_mode=ParseMode.HTML
-        )
+    await send_typing(update)
+    document: Document = update.message.document
+    chat_id = str(update.effective_chat.id) if update and update.effective_chat else "unknown"
+    
+    # Immediate response - don't block other users
+    analyzing_msg = await update.message.reply_text(
+        "📄 <b>Hujjat qabul qilindi!</b>\n\n"
+        "⏳ <i>Tahlil qilinmoqda... Boshqa savollaringizni yuboring, men javob beraman!</i>\n\n"
+        "📱 <i>Hujjat tahlili tayyor bo'lganda yuboraman.</i>",
+        parse_mode=ParseMode.HTML
+    )
+    
+    # Process document in background - don't await it!
+    asyncio.create_task(process_document_background(
+        document, chat_id, analyzing_msg, update, context
+    ))
+    
+    # Immediately track activity and return - don't block!
+    track_user_activity(chat_id, "documents", update)
+
+async def process_document_background(document: Document, chat_id: str, analyzing_msg, update: Update, context):
+    """Process document in background without blocking other users"""
+    try:
+        # Check file size (limit to 20MB)
+        if document.file_size and document.file_size > 20 * 1024 * 1024:
+            await analyzing_msg.edit_text(
+                "❌ Fayl juda katta. Maksimal hajm: 20MB",
+                parse_mode=ParseMode.HTML
+            )
+            return
+        
+        file = await context.bot.get_file(document.file_id)
+        
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{document.file_name}") as tmp_file:
+            tmp_path = tmp_file.name
         
         try:
-            # Check file size (limit to 20MB)
-            if document.file_size and document.file_size > 20 * 1024 * 1024:
-                await safe_reply(update, "❌ Fayl juda katta. Maksimal hajm: 20MB")
-                return
+            # Download file with timeout
+            await asyncio.wait_for(
+                file.download_to_drive(custom_path=tmp_path),
+                timeout=60  # 1 minute timeout for download
+            )
             
-            file = await context.bot.get_file(document.file_id)
+            # Wait a moment for file to be fully written
+            await asyncio.sleep(0.5)
             
-            # Create temporary file
-            with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{document.file_name}") as tmp_file:
-                await file.download_to_drive(custom_path=tmp_file.name)
-                tmp_path = tmp_file.name
+            # Check if file exists and has content
+            if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) == 0:
+                raise Exception("Document file download failed or is empty")
             
-            try:
-                # Upload to Gemini for analysis with timeout
-                uploaded = await asyncio.wait_for(
-                    asyncio.to_thread(lambda: genai.upload_file(tmp_path)),
-                    timeout=45  # Increased timeout for documents
-                )
-                response = await asyncio.wait_for(
-                    asyncio.to_thread(lambda: model.generate_content([
+            # Process with Gemini in separate thread
+            def process_with_gemini():
+                try:
+                    # Upload to Gemini
+                    uploaded = genai.upload_file(tmp_path)
+                    
+                    # Wait for processing
+                    import time
+                    time.sleep(3)  # Give Gemini time to process
+                    
+                    # Generate response
+                    response = model.generate_content([
                         {"role": "user", "parts": [
-                            "The user sent a document. Analyze the document and respond to the user awesomely with emojis and nice formatting. Be creative and answer educationally that user needs to get lessons from that document. Answer in Uzbek if the user speaks Uzbek. Otherwise use appropriate language."
+                            "The user sent a document. Analyze the document and respond to the user awesomely with emojis and nice formatting. Be creative, friendly and helpful and answer educationally that user needs to get lessons from that document. Answer in Uzbek if the user speaks Uzbek. Otherwise use appropriate language."
                         ]},
                         {"role": "user", "parts": [uploaded]}
-                    ])),
-                    timeout=45  # Increased timeout
+                    ])
+                    
+                    return response.text.strip() if response and response.text else "❌ Hujjatni tahlil qila olmadim."
+                except Exception as e:
+                    logger.error(f"Gemini processing error: {e}")
+                    return None
+            
+            # Run Gemini processing in thread pool with timeout
+            try:
+                reply = await asyncio.wait_for(
+                    asyncio.to_thread(process_with_gemini),
+                    timeout=45  # 45 second timeout
                 )
-                
-                reply = response.text.strip() if response.text else "❌ Hujjatni tahlil qila olmadim."
-                
-                chat_id = str(update.effective_chat.id)
-                
-                # Track document activity
-                track_user_activity(chat_id, "documents", update)
-                
+            except asyncio.TimeoutError:
+                reply = None
+            
+            if reply:
                 # Store document content in memory for future reference
-                store_content_memory(chat_id, "document", reply, document.file_name)
+                store_content_memory(chat_id, "document", reply, document.file_name if document.file_name else "unknown")
                 
-                user_history.setdefault(chat_id, []).append({"role": "user", "content": f"[uploaded document: {document.file_name}]"})
+                user_history.setdefault(chat_id, []).append({"role": "user", "content": f"[uploaded document: {document.file_name if document.file_name else 'unknown'}]"})
                 user_history[chat_id].append({"role": "model", "content": reply})
                 
-                # Send the actual response
-                await send_long_message(update, f"{reply}")
-                
-            finally:
-                try:
-                    os.unlink(tmp_path)  # Clean up temp file
-                except Exception:
-                    pass
-                
+                # Update the analyzing message with results
+                await analyzing_msg.edit_text(
+                    f"📄 <b>Hujjat tahlil natijasi:</b>\n\n{reply}",
+                    parse_mode=ParseMode.HTML
+                )
+            else:
+                await analyzing_msg.edit_text(
+                    "❌ Hujjat tahlilida xatolik yuz berdi. Qaytadan urinib ko'ring.",
+                    parse_mode=ParseMode.HTML
+                )
+        
         except asyncio.TimeoutError:
             logger.error("Document processing timeout")
-            await safe_reply(update, "⏰ Hujjat tahlili juda uzoq davom etdi. Qaytadan urinib ko'ring.")
-        except Exception as e:
-            logger.error(f"Document processing error: {e}")
-            await safe_reply(update, "❌ Hujjatni qayta ishlashda xatolik. Qaytadan urinib ko'ring.")
-    except (NetworkError, TelegramError, TimedOut) as e:
-        logger.error(f"Telegram API error in handle_document: {e}")
-        await asyncio.sleep(2)
+            await analyzing_msg.edit_text(
+                "⏰ Hujjat tahlili juda uzoq davom etdi. Iltimos, kichikroq hujjat yuboring.",
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as processing_error:
+            logger.error(f"Document processing error: {processing_error}")
+            
+            # Provide specific error messages
+            error_msg = "❌ Hujjat tahlilida xatolik:"
+            if "quota" in str(processing_error).lower():
+                error_msg += "\n📊 API chekloviga yetdik. Biroz kuting va qaytadan urinib ko'ring."
+            elif "format" in str(processing_error).lower():
+                error_msg += "\n📄 Hujjat formati qo'llab-quvvatlanmaydi."
+            elif "size" in str(processing_error).lower():
+                error_msg += "\n📏 Hujjat juda katta. 20MB dan kichik hujjat yuboring."
+            else:
+                error_msg += "\n🔄 Qaytadan urinib ko'ring yoki boshqa hujjat yuboring."
+            
+            await analyzing_msg.edit_text(error_msg, parse_mode=ParseMode.HTML)
+        
+        finally:
+            # Always clean up temp file
+            try:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+            except Exception as cleanup_error:
+                logger.warning(f"Failed to cleanup temp file: {cleanup_error}")
+            
     except Exception as e:
-        logger.error(f"Unexpected error in handle_document: {e}")
+        logger.error(f"Document handler error: {e}")
+        try:
+            await analyzing_msg.edit_text(
+                "❌ Hujjat yuklashda xatolik yuz berdi. Iltimos qaytadan urinib ko'ring.",
+                parse_mode=ParseMode.HTML
+            )
+        except:
+            pass
 
 # ─── 🎬 Enhanced Video Analysis (Non-Blocking) ─────────────────────────────────────
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle video uploads and analysis with non-blocking processing."""
-    if not update.message or not update.message.video:
+    if not update or not update.message or not update.message.video:
         return
         
     await send_typing(update)
     video = update.message.video
-    chat_id = str(update.effective_chat.id)
+    chat_id = str(update.effective_chat.id) if update and update.effective_chat else "unknown"
     
     # Immediate response - don't block other users
     analyzing_msg = await update.message.reply_text(
@@ -554,7 +634,7 @@ async def process_video_background(video, chat_id: str, analyzing_msg, update: U
                     # Generate response
                     response = model.generate_content([
                         {"role": "user", "parts": [
-                            "The user sent a video. Watch and analyze it like a close friend who's genuinely interested and excited to see what they shared! Give a warm, personal, and engaging response about what you see. Be conversational, use emojis, and react naturally like you're chatting with a good friend. Don't be robotic or give technical descriptions - just be genuine and friendly! Answer in Uzbek if the user speaks Uzbek, otherwise use appropriate language."
+                            "The user sent a video. Watch and analyze it like a close friend who's genuinely interested and excited to see what they shared! Give a warm, personal, and engaging response about what you see. Be creative, friendly, helpful, use emojis, and react naturally like you're chatting with a good friend. Don't be robotic or give technical descriptions - just be genuine and friendly! Answer in Uzbek if the user speaks Uzbek, otherwise use appropriate language."
                         ]},
                         {"role": "user", "parts": [uploaded]}
                     ])
@@ -634,149 +714,85 @@ async def process_video_background(video, chat_id: str, analyzing_msg, update: U
             pass
 
 # ─── 📊 Enhanced Stats Commands ─────────────────────────────────────────
+# Keep the statistics functionality from previous.py
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show enhanced user statistics with detailed breakdown."""
+    """Show user statistics"""
     if not update.message or not update.effective_chat:
         return
         
     chat_id = str(update.effective_chat.id)
     history = user_history.get(chat_id, [])
     user_stats_data = user_stats.get(chat_id, {})
+    user_data = user_info.get(chat_id, {})
     
-    # Calculate message statistics
     total_messages = len(history)
     user_messages = len([m for m in history if m["role"] == "user"])
     bot_messages = len([m for m in history if m["role"] == "model"])
     
-    # Get comprehensive media statistics
     photos_sent = user_stats_data.get("photos", 0)
     voice_audio_sent = user_stats_data.get("voice_audio", 0)
     documents_sent = user_stats_data.get("documents", 0)
     videos_sent = user_stats_data.get("videos", 0)
     search_queries = user_stats_data.get("search_queries", 0)
     total_characters = user_stats_data.get("total_characters", 0)
-    total_media = photos_sent + voice_audio_sent + documents_sent + videos_sent
     
-    # Calculate activity metrics
-    first_interaction = user_stats_data.get("first_interaction")
-    days_active = 0
-    if first_interaction:
-        days_active = (time.time() - first_interaction) / (24 * 60 * 60)
-    
-    # Activity level determination
-    if user_messages >= 50:
-        activity_level = "🔥 Juda faol"
-        activity_emoji = "🔥"
-    elif user_messages >= 20:
-        activity_level = "⚡ Faol"
-        activity_emoji = "⚡"
-    elif user_messages >= 5:
-        activity_level = "💪 O'rtacha faol"
-        activity_emoji = "💪"
-    else:
-        activity_level = "🌱 Yangi foydalanuvchi"
-        activity_emoji = "🌱"
-    
-    # Weekly and monthly activity
-    weekly_activity = get_user_activity_period(chat_id, 7)
-    monthly_activity = get_user_activity_period(chat_id, 30)
-    
-    # Content memory count
     content_memories = len(user_content_memory.get(chat_id, []))
     
-    # Build comprehensive stats message
+    # First interaction and last active
+    first_interaction = user_stats_data.get("first_interaction", time.time())
+    last_active = user_stats_data.get("last_active", time.time())
+    
+    first_date = datetime.fromtimestamp(first_interaction).strftime("%Y-%m-%d %H:%M")
+    last_date = datetime.fromtimestamp(last_active).strftime("%Y-%m-%d %H:%M")
+    
+    # Calculate days since first interaction
+    days_active = max(1, int((time.time() - first_interaction) / (24 * 60 * 60)))
+    avg_messages_per_day = user_messages / days_active
+    
+    if user_messages >= 50:
+        activity_level = "🔥 Juda faol"
+    elif user_messages >= 20:
+        activity_level = "⚡ Faol"
+    elif user_messages >= 5:
+        activity_level = "💪 O'rtacha faol"
+    else:
+        activity_level = "🌱 Yangi foydalanuvchi"
+    
+    # User profile info
+    username = user_data.get("username", "Yo'q")
+    first_name = user_data.get("first_name", "Noma'lum")
+    last_name = user_data.get("last_name", "")
+    full_name = f"{first_name} {last_name}".strip()
+    user_id = user_data.get("user_id", "Noma'lum")
+    
     stats_text = (
-        f"📊 <b>Sizning to'liq statistikangiz</b> {activity_emoji}\n\n"
+        f"📊 <b>Sizning to'liq statistikangiz</b>\n\n"
         f"👤 <b>Profil ma'lumotlari:</b>\n"
-        f"📈 Faollik darajasi: <b>{activity_level}</b>\n"
-        f"📅 Botdan foydalanish: <b>{days_active:.0f} kun</b>\n"
-        f"🕰️ So'nggi 7 kun: <b>{weekly_activity['messages']} xabar</b>\n"
-        f"📆 So'nggi 30 kun: <b>{monthly_activity['messages']} xabar</b>\n\n"
+        f"📝 Ism: <b>{full_name}</b>\n"
+        f"🏷️ Username: <b>@{username}</b>\n"
+        f"🆔 User ID: <code>{user_id}</code>\n"
+        f"🆔 Chat ID: <code>{chat_id}</code>\n\n"
+        f"📈 <b>Faollik darajasi:</b> {activity_level}\n\n"
         f"💬 <b>Xabarlar statistikasi:</b>\n"
         f"📝 Sizning xabarlaringiz: <b>{user_messages}</b>\n"
-        f"🤖 Bot javoblari: <b>{bot_messages}</b>\n"
+        f"🤖 Bot javobi: <b>{bot_messages}</b>\n"
         f"📊 Jami xabarlar: <b>{total_messages}</b>\n"
-        f"🔍 Qidiruv so'rovlari: <b>{search_queries}</b>\n"
-    )
-    
-    if total_characters > 0:
-        stats_text += f"✍️ Yozilgan belgilar: <b>{total_characters:,}</b>\n"
-    
-    stats_text += (
-        f"\n🎨 <b>Yuborilgan media fayllar:</b>\n"
-        f"📷 Rasmlar: <b>{photos_sent}</b>"
-    )
-    
-    if weekly_activity['photos'] > 0:
-        stats_text += f" (So'nggi 7 kun: {weekly_activity['photos']})"
-    
-    stats_text += (
-        f"\n🎤 Audio/Ovoz: <b>{voice_audio_sent}</b>"
-    )
-    
-    if weekly_activity['voice_audio'] > 0:
-        stats_text += f" (So'nggi 7 kun: {weekly_activity['voice_audio']})"
-    
-    stats_text += (
-        f"\n📄 Hujjatlar: <b>{documents_sent}</b>"
-    )
-    
-    if weekly_activity['documents'] > 0:
-        stats_text += f" (So'nggi 7 kun: {weekly_activity['documents']})"
-    
-    stats_text += (
-        f"\n🎥 Videolar: <b>{videos_sent}</b>"
-    )
-    
-    if weekly_activity['videos'] > 0:
-        stats_text += f" (So'nggi 7 kun: {weekly_activity['videos']})"
-    
-    stats_text += (
-        f"\n📁 Jami media: <b>{total_media}</b>\n\n"
+        f"📝 Jami belgilar: <b>{total_characters:,}</b>\n"
+        f"📅 Kunlik o'rtacha: <b>{avg_messages_per_day:.1f}</b> xabar\n\n"
+        f"🎨 <b>Media fayllar:</b>\n"
+        f"📷 Rasmlar: <b>{photos_sent}</b>\n"
+        f"🎤 Audio/Ovoz: <b>{voice_audio_sent}</b>\n"
+        f"📄 Hujjatlar: <b>{documents_sent}</b>\n"
+        f"🎥 Videolar: <b>{videos_sent}</b>\n"
+        f"🔍 Qidiruv so'rovlari: <b>{search_queries}</b>\n\n"
+        f"🕰️ <b>Vaqt ma'lumotlari:</b>\n"
+        f"🎆 Birinchi kirish: <b>{first_date}</b>\n"
+        f"⏰ Oxirgi faollik: <b>{last_date}</b>\n"
+        f"📅 Faol kunlar: <b>{days_active}</b>\n\n"
         f"🧠 <b>Xotira tizimi:</b>\n"
         f"💾 Saqlangan kontentlar: <b>{content_memories}</b>\n"
-        f"🔗 Kontekstli javoblar: <b>Faol</b>\n\n"
-    )
-    
-    # Add achievement badges
-    achievements = []
-    if user_messages >= 100:
-        achievements.append("🏆 Suhbat ustasi")
-    elif user_messages >= 50:
-        achievements.append("🏅 Super foydalanuvchi")
-    elif user_messages >= 20:
-        achievements.append("⭐ Faol a'zo")
-    
-    if total_media >= 50:
-        achievements.append("🎨 Media eksperi")
-    elif total_media >= 20:
-        achievements.append("📸 Media ishqibozi")
-    
-    if days_active >= 60:
-        achievements.append("💎 Olmos foydalanuvchi")
-    elif days_active >= 30:
-        achievements.append("🥇 Oltin a'zo")
-    elif days_active >= 7:
-        achievements.append("🥈 Kumush a'zo")
-    
-    if content_memories >= 20:
-        achievements.append("🧠 Xotira ustasi")
-    elif content_memories >= 10:
-        achievements.append("📚 Kontent yig'uvchi")
-    
-    if search_queries >= 20:
-        achievements.append("🔍 Qidiruv eksperti")
-    
-    if achievements:
-        stats_text += f"🏅 <b>Sizning yutuqlaringiz:</b>\n"
-        for achievement in achievements:
-            stats_text += f"• {achievement}\n"
-        stats_text += "\n"
-    
-    stats_text += (
-        f"📞 <b>Yordam kerakmi?</b>\n"
-        f"<code>/contact [xabaringiz]</code> - Admin bilan to'g'ridan-to'g'ri bog'lanish\n"
-        f"<code>/help</code> - Barcha buyruqlarni ko'rish\n\n"
+        f"📝 Xotira chegarasi: <b>{MAX_CONTENT_MEMORY}</b> ta\n"
+        f"🔄 Suhbat tarixi: <b>{len(history)}</b>/{MAX_HISTORY * 2} ta\n\n"
         f"<i>🙏 AQLJON siz uchun hamisha shu yerda!</i>"
     )
     
@@ -807,86 +823,189 @@ def get_user_activity_period(chat_id: str, days: int) -> dict:
     
     return activity
 
-# ─── 📢 Broadcast System ─────────────────────────────────────
-async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Broadcast message to all users (admin only)."""
-    if not update.message or not update.effective_chat:
+# ─── 👑 Admin Commands ─────────────────────────────────────────────────
+# Keep the admin statistics functionality from previous.py
+async def admin_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show detailed admin statistics (admin only)"""
+    if not update or not update.message or not update.effective_chat or not update.effective_user:
         return
     
-    # Check if user is admin
-    admin_ids = [ADMIN_ID]  # Get admin ID from environment
     user_id = str(update.effective_user.id)
+    admin_ids = [ADMIN_ID.strip()] if ADMIN_ID and ADMIN_ID.strip() else []
     
     if user_id not in admin_ids:
-        await update.message.reply_text("❌ Bu buyruq faqat admin uchun!")
+        # Hide admin command from non-admin users - no response
         return
     
-    # Get message text after /broadcast command
-    text = update.message.text.strip()
-    parts = text.split(" ", 1)
+    # Calculate comprehensive statistics
+    total_users = len(user_history)
+    total_messages = sum(len(history) for history in user_history.values())
+    total_user_messages = sum(len([m for m in history if m["role"] == "user"]) for history in user_history.values())
+    avg_messages = total_user_messages / total_users if total_users > 0 else 0
     
-    if len(parts) < 2:
-        await update.message.reply_text(
-            "📢 <b>Broadcast foydalanish:</b>\n\n"
-            "<code>/broadcast Sizning xabaringiz</code>\n\n"
-            "Bu barcha foydalanuvchilarga xabar yuboradi.",
-            parse_mode=ParseMode.HTML
-        )
-        return
+    # Media statistics
+    total_photos = sum(stats.get("photos", 0) for stats in user_stats.values())
+    total_voice = sum(stats.get("voice_audio", 0) for stats in user_stats.values())
+    total_documents = sum(stats.get("documents", 0) for stats in user_stats.values())
+    total_videos = sum(stats.get("videos", 0) for stats in user_stats.values())
+    total_searches = sum(stats.get("search_queries", 0) for stats in user_stats.values())
     
-    broadcast_message = parts[1]
+    # Activity categorization
+    highly_active = sum(1 for history in user_history.values() if len([m for m in history if m["role"] == "user"]) >= 20)
+    moderately_active = sum(1 for history in user_history.values() if 5 <= len([m for m in history if m["role"] == "user"]) < 20)
+    low_activity = sum(1 for history in user_history.values() if 1 <= len([m for m in history if m["role"] == "user"]) < 5)
     
-    # Get all users who have interacted with the bot
-    all_users = list(user_history.keys())
+    # Memory system status
+    total_content_memories = sum(len(memories) for memories in user_content_memory.values())
     
-    if not all_users:
-        await update.message.reply_text("❌ Hech qanday foydalanuvchi topilmadi!")
-        return
+    # Top 20 users by message count
+    user_message_counts = []
+    for chat_id, history in user_history.items():
+        user_messages = len([m for m in history if m["role"] == "user"])
+        if user_messages > 0:
+            user_data = user_info.get(chat_id, {})
+            username = user_data.get("username", "Unknown")
+            first_name = user_data.get("first_name", "Unknown")
+            last_name = user_data.get("last_name", "")
+            full_name = f"{first_name} {last_name}".strip() or "Unknown"
+            
+            user_message_counts.append({
+                "chat_id": chat_id,
+                "user_id": user_data.get("user_id", "Unknown"),
+                "username": username,
+                "full_name": full_name,
+                "messages": user_messages
+            })
     
-    # Send broadcast message
-    successful_sends = 0
-    failed_sends = 0
+    user_message_counts.sort(key=lambda x: x["messages"], reverse=True)
+    top_20_users = user_message_counts[:20]
     
-    await update.message.reply_text(f"📤 {len(all_users)} ta foydalanuvchiga xabar yuborilmoqda...")
-    
-    for chat_id in all_users:
-        try:
-            await context.bot.send_message(
-                chat_id=int(chat_id),
-                text=broadcast_message,
-                parse_mode=ParseMode.HTML
-            )
-            successful_sends += 1
-            await asyncio.sleep(0.1)  # Small delay to avoid rate limits
-        except Exception as e:
-            failed_sends += 1
-            logger.warning(f"Failed to send to {chat_id}: {e}")
-    
-    # Send results to admin
-    result_text = (
-        f"✅ <b>Broadcast tugallandi!</b>\n\n"
-        f"📤 Yuborildi: <b>{successful_sends}</b>\n"
-        f"❌ Yuborilmadi: <b>{failed_sends}</b>\n"
-        f"👥 Jami foydalanuvchilar: <b>{len(all_users)}</b>"
+    admin_stats_text = (
+        f"👑 <b>ADMIN STATISTICS DASHBOARD</b>\n\n"
+        f"📊 <b>Overall Statistics:</b>\n"
+        f"👥 Total Users: <b>{total_users}</b>\n"
+        f"💬 Total Messages: <b>{total_messages}</b>\n"
+        f"📝 User Messages: <b>{total_user_messages}</b>\n"
+        f"📈 Avg Messages/User: <b>{avg_messages:.1f}</b>\n\n"
+        f"🎨 <b>Media Breakdown:</b>\n"
+        f"📷 Photos: <b>{total_photos}</b>\n"
+        f"🎤 Voice/Audio: <b>{total_voice}</b>\n"
+        f"📄 Documents: <b>{total_documents}</b>\n"
+        f"🎥 Videos: <b>{total_videos}</b>\n"
+        f"🔍 Searches: <b>{total_searches}</b>\n\n"
+        f"📊 <b>User Activity Categories:</b>\n"
+        f"🔥 Highly Active (20+ msgs): <b>{highly_active}</b>\n"
+        f"⚡ Moderately Active (5-19 msgs): <b>{moderately_active}</b>\n"
+        f"🌱 Low Activity (1-4 msgs): <b>{low_activity}</b>\n\n"
+        f"🧠 <b>Memory System:</b>\n"
+        f"💾 Content Memories: <b>{total_content_memories}</b>\n"
+        f"📝 History Limit: <b>{MAX_HISTORY}</b> msgs/user\n"
+        f"👥 User Limit: <b>{MAX_USERS_IN_MEMORY}</b>\n"
+        f"🗓️ Cleanup After: <b>{MAX_INACTIVE_DAYS}</b> days\n\n"
     )
     
-    await update.message.reply_text(result_text, parse_mode=ParseMode.HTML)
+    # Add top 20 users
+    if top_20_users:
+        admin_stats_text += "🏆 <b>Top 20 Users by Messages:</b>\n"
+        for i, user in enumerate(top_20_users, 1):
+            username_display = f"@{user['username']}" if user['username'] != "Unknown" else "No username"
+            admin_stats_text += (
+                f"{i}. <b>{user['full_name']}</b> ({username_display})\n"
+                f"   ID: <code>{user['user_id']}</code> | Chat: <code>{user['chat_id']}</code> | Messages: <b>{user['messages']}</b>\n\n"
+            )
+    
+    admin_stats_text += "<i>🔒 Admin-only information</i>"
+    
+    await send_long_message(update, admin_stats_text)
 
-# ─── 📢 Quick Update Broadcast ─────────────────────────────────
-async def send_update_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Quick command to send bot update message."""
-    if not update.message or not update.effective_chat:
+# Keep the broadcast functionality from previous.py
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send broadcast message to all users (admin only)"""
+    if not update or not update.message or not update.effective_chat or not update.effective_user:
+        return
+    
+    user_id = str(update.effective_user.id)
+    admin_ids = [ADMIN_ID.strip()] if ADMIN_ID and ADMIN_ID.strip() else []
+    
+    if user_id not in admin_ids:
+        # Hide admin command from non-admin users - no response
+        return
+    
+    # Extract message text
+    message_text = update.message.text
+    if not message_text or len(message_text.split(" ", 1)) < 2:
+        await safe_reply(update, "❓ Iltimos broadcast xabarini kiriting. Misol: <code>/broadcast Yangilik...</code>")
+        return
+    
+    broadcast_text = message_text.split(" ", 1)[1]
+    
+    # Send broadcast to all users
+    total_users = len(user_history)
+    success_count = 0
+    failed_count = 0
+    
+    status_msg = await safe_reply(update, f"📡 <b>Broadcast boshlandi...</b>\n\n📊 Jami foydalanuvchilar: {total_users}")
+    
+    if not status_msg:
+        logger.error("Failed to send broadcast status message")
+        return
+    
+    for i, chat_id in enumerate(user_history.keys()):
+        try:
+            # Create a fake update object for sending
+            await context.bot.send_message(
+                chat_id=int(chat_id),
+                text=f"📢 <b>ADMIN XABARI:</b>\n\n{broadcast_text}",
+                parse_mode=ParseMode.HTML
+            )
+            success_count += 1
+        except Exception as e:
+            logger.warning(f"Failed to send broadcast to {chat_id}: {e}")
+            failed_count += 1
+        
+        # Update status every 10 users
+        if (i + 1) % 10 == 0 and status_msg:
+            try:
+                await safe_edit_message(
+                    status_msg,
+                    f"📡 <b>Broadcast jarayoni...</b>\n\n"
+                    f"✅ Yuborildi: {success_count}\n"
+                    f"❌ Xatolik: {failed_count}\n"
+                    f"📊 Jarayon: {i + 1}/{total_users}"
+                )
+            except Exception:
+                pass
+    
+    # Final status
+    final_text = (
+        f"📡 <b>Broadcast yakunlandi!</b>\n\n"
+        f"✅ Muvaffaqiyatli: <b>{success_count}</b>\n"
+        f"❌ Xatolik: <b>{failed_count}</b>\n"
+        f"📊 Jami: <b>{total_users}</b>\n\n"
+        f"<i>🔒 Admin broadcast yakunlandi</i>"
+    )
+    
+    if status_msg:
+        await safe_edit_message(status_msg, final_text)
+    else:
+        await safe_reply(update, final_text)
+
+# Keep the update functionality from previous.py
+async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send update message to all users (admin only)"""
+    if not update or not update.message or not update.effective_chat or not update.effective_user:
         return
     
     # Check if user is admin
-    admin_ids = [ADMIN_ID]  # Get admin ID from environment
+    admin_ids = [ADMIN_ID.strip()] if ADMIN_ID and ADMIN_ID.strip() else []
+    
     user_id = str(update.effective_user.id)
     
     if user_id not in admin_ids:
-        await update.message.reply_text("❌ Bu buyruq faqat admin uchun!")
+        # Hide admin command from non-admin users - no response at all
         return
     
-    # Enhanced update message with current features
+    # Enhanced update message with current features (like in bot.py)
     update_message = (
         f"🎉🎉🎉 <b>TADAAAAM ! AQLJON yanada AQLLI bo'ldi!</b> 🚀\n\n"
         f"<b>✨ Yangi imkoniyatlar:</b>\n"
@@ -907,20 +1026,36 @@ async def send_update_broadcast(update: Update, context: ContextTypes.DEFAULT_TY
         f"<b>🙏 AQLJON - doimo siz bilan birga!</b>"
     )
     
-    # Get all users
-    all_users = list(user_history.keys())
+    # Get all users who have ever interacted with the bot
+    all_chat_ids = set()
     
-    if not all_users:
-        await update.message.reply_text("❌ Hech qanday foydalanuvchi topilmadi!")
+    # From user_history (anyone who sent messages)
+    all_chat_ids.update(user_history.keys())
+    
+    # From user_info (anyone who started the bot)
+    all_chat_ids.update(user_info.keys())
+    
+    # From user_stats (anyone tracked)
+    all_chat_ids.update(user_stats.keys())
+    
+    # From user_content_memory (anyone who sent media)
+    all_chat_ids.update(user_content_memory.keys())
+    
+    if not all_chat_ids:
+        await safe_reply(update, "❌ Hech qanday foydalanuvchi topilmadi!")
         return
     
     # Send update message
     successful_sends = 0
     failed_sends = 0
     
-    await update.message.reply_text(f"📤 {len(all_users)} ta foydalanuvchiga yangilanish haqida xabar yuborilmoqda...")
+    status_msg = await safe_reply(update, f"📤 {len(all_chat_ids)} ta foydalanuvchiga yangilanish haqida xabar yuborilmoqda...")
     
-    for chat_id in all_users:
+    if not status_msg:
+        logger.error("Failed to send update status message")
+        return
+    
+    for chat_id in all_chat_ids:
         try:
             await context.bot.send_message(
                 chat_id=int(chat_id),
@@ -938,157 +1073,153 @@ async def send_update_broadcast(update: Update, context: ContextTypes.DEFAULT_TY
         f"✅ <b>Yangilanish xabari yuborildi!</b>\n\n"
         f"📤 Yuborildi: <b>{successful_sends}</b>\n"
         f"❌ Yuborilmadi: <b>{failed_sends}</b>\n"
-        f"👥 Jami foydalanuvchilar: <b>{len(all_users)}</b>"
+        f"👥 Jami foydalanuvchilar: <b>{len(all_chat_ids)}</b>"
     )
     
-    await update.message.reply_text(result_text, parse_mode=ParseMode.HTML)
-
-# ─── 📊 Admin Statistics Command ─────────────────────────────────
-async def admin_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show comprehensive bot statistics (admin only)."""
-    if not update.message or not update.effective_chat:
-        return
-    
-    # Check if user is admin
-    admin_ids = [ADMIN_ID]  # Get admin ID from environment
-    user_id = str(update.effective_user.id)
-    
-    if user_id not in admin_ids:
-        await update.message.reply_text("❌ Bu buyruq faqat admin uchun!")
-        return
-    
-    # Calculate comprehensive statistics
-    total_users = len(user_history)
-    total_messages = sum(len(history) for history in user_history.values())
-    
-    # Count media types from user_stats
-    total_photos = sum(stats.get("photos", 0) for stats in user_stats.values())
-    total_voice_audio = sum(stats.get("voice_audio", 0) for stats in user_stats.values())
-    total_documents = sum(stats.get("documents", 0) for stats in user_stats.values())
-    total_videos = sum(stats.get("videos", 0) for stats in user_stats.values())
-    
-    # Count content memories
-    total_content_memories = sum(len(memories) for memories in user_content_memory.values())
-    
-    # Memory usage estimation
-    estimated_memory_mb = (
-        (total_users * 5) +  # ~5KB per user for basic data
-        (total_messages * 0.5) +  # ~0.5KB per message
-        (total_content_memories * 2)  # ~2KB per content memory
-    ) / 1024  # Convert to MB
-    
-    memory_status = "🟢 Good" if estimated_memory_mb < 100 else "🟡 Warning" if estimated_memory_mb < 200 else "🔴 Critical"
-    
-    # Most active users (top 20)
-    user_activity = []
-    for chat_id, history in user_history.items():
-        user_messages = len([m for m in history if m["role"] == "user"])
-        if user_messages > 0:
-            # Get user info if available
-            user_data = user_info.get(chat_id, {})
-            username = user_data.get("username")
-            first_name = user_data.get("first_name")
-            last_name = user_data.get("last_name")
-            
-            # Build display name
-            display_name = f"ID: {chat_id}"
-            if username:
-                display_name += f" (@{username})"
-            if first_name:
-                display_name += f" - {first_name}"
-                if last_name:
-                    display_name += f" {last_name}"
-            
-            user_activity.append((chat_id, user_messages, display_name))
-    
-    user_activity.sort(key=lambda x: x[1], reverse=True)
-    top_users = user_activity[:20]  # Top 20 users
-    
-    # Calculate average messages per user
-    avg_messages = total_messages / total_users if total_users > 0 else 0
-    
-    # Build comprehensive statistics message
-    stats_text = (
-        f"<b>🤖 TO'LIQ BOT STATISTIKASI</b>\n\n"
-        f"👥 <b>Foydalanuvchilar tahlili:</b>\n"
-        f"Jami foydalanuvchilar: <b>{total_users}</b> / {MAX_USERS_IN_MEMORY}\n"
-        f"Jami xabarlar: <b>{total_messages}</b>\n"
-        f"O'rtacha xabar/foydalanuvchi: <b>{avg_messages:.1f}</b>\n\n"
-        f"<b>📁 Media statistikasi:</b>\n"
-        f"📷 Tahlil qilingan rasmlar: <b>{total_photos}</b>\n"
-        f"🎙️ Ovoz/Audio: <b>{total_voice_audio}</b>\n"
-        f"📄 Qayta ishlangan hujjatlar: <b>{total_documents}</b>\n"
-        f"🎬 Tahlil qilingan videolar: <b>{total_videos}</b>\n"
-        f"Jami media fayllar: <b>{total_photos + total_voice_audio + total_documents + total_videos}</b>\n\n"
-        f"🧠 <b>Xotira tizimi:</b>\n"
-        f"Saqlangan kontentlar: <b>{total_content_memories}</b>\n"
-        f"Faol foydalanuvchi sessiyalari: <b>{len(user_history)}</b>\n"
-        f"Taxminiy xotira ishlatish: <b>{estimated_memory_mb:.1f} MB</b>\n"
-        f"Xotira holati: {memory_status}\n\n"
-    )
-    
-    if top_users:
-        stats_text += "<b>🏆 ENG FAOL 20 FOYDALANUVCHI:</b>\n"
-        for i, (chat_id, msg_count, display_name) in enumerate(top_users, 1):
-            # Limit display name length for readability
-            if len(display_name) > 60:
-                display_name = display_name[:57] + "..."
-            stats_text += f"{i}. {display_name}: <b>{msg_count}</b> xabar\n"
-        
-        # Add user breakdown by activity level
-        stats_text += "\n<b>📈 Foydalanuvchilar faollik bo'yicha:</b>\n"
-        highly_active = len([u for u in user_activity if u[1] >= 20])
-        moderately_active = len([u for u in user_activity if 5 <= u[1] < 20])
-        low_active = len([u for u in user_activity if 1 <= u[1] < 5])
-        
-        stats_text += f"Juda faol (20+ xabar): <b>{highly_active}</b>\n"
-        stats_text += f"O'rtacha faol (5-19 xabar): <b>{moderately_active}</b>\n"
-        stats_text += f"Kam faol (1-4 xabar): <b>{low_active}</b>\n"
-    
-    stats_text += "\n<i>🔥 Bot mukammal ishlamoqda! Barcha tizimlar normal holatda.</i>"
-    
-    # Send stats in chunks if too long
-    if len(stats_text) > 4096:
-        # Split into chunks
-        chunks = []
-        current_chunk = ""
-        
-        for line in stats_text.split("\n"):
-            if len(current_chunk + line + "\n") > 4000:
-                chunks.append(current_chunk)
-                current_chunk = line + "\n"
-            else:
-                current_chunk += line + "\n"
-        
-        if current_chunk:
-            chunks.append(current_chunk)
-        
-        # Send each chunk
-        for i, chunk in enumerate(chunks):
-            if i == 0:
-                await update.message.reply_text(chunk, parse_mode=ParseMode.HTML)
-            else:
-                await asyncio.sleep(0.1)  # Small delay between messages
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text=chunk,
-                    parse_mode=ParseMode.HTML
-                )
+    if status_msg:
+        await safe_edit_message(status_msg, result_text)
     else:
-        await update.message.reply_text(stats_text, parse_mode=ParseMode.HTML)
+        await safe_reply(update, result_text)
 
-# ─── 🛠️ System Monitoring Command ─────────────────────────────────────
-async def system_monitor_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Monitor system health and performance (admin only)."""
-    if not update.message or not update.effective_chat:
+# Add a dictionary to track user states for contact and search flows
+user_states = {}
+
+# ─── 📞 Contact Command ─────────────────────────────────────────────────
+async def contact_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send contact message to admin (users only)"""
+    if not update or not update.message or not update.effective_chat or not update.effective_user:
+        return
+    
+    user_id = str(update.effective_user.id)
+    admin_ids = [ADMIN_ID.strip()] if ADMIN_ID and ADMIN_ID.strip() else []
+    
+    # Admin can't use contact command
+    if user_id in admin_ids:
+        await safe_reply(update, "⚠️ Admin kontakt buyrug'idan foydalana olmaydi. Bevosita xabar yozing.")
+        return
+    
+    # Extract message text
+    message_text = update.message.text
+    if not message_text or len(message_text.split(" ", 1)) < 2:
+        await safe_reply(update, "❓ Iltimos adminga yubormoqchi bo'lgan xabaringizni kiriting. Misol: <code>/contact Yordam kerak</code>")
+        return
+    
+    contact_text = message_text.split(" ", 1)[1]
+    chat_id = str(update.effective_chat.id)
+    
+    # Store contact message
+    if chat_id not in user_contact_messages:
+        user_contact_messages[chat_id] = []
+    
+    contact_message = {
+        "message": contact_text,
+        "timestamp": time.time(),
+        "user_info": user_info.get(chat_id, {}),
+        "replied": False
+    }
+    
+    user_contact_messages[chat_id].append(contact_message)
+    
+    # Send to admin if admin ID is set
+    if ADMIN_ID and ADMIN_ID.strip():
+        try:
+            user_data = user_info.get(chat_id, {})
+            username = user_data.get("username", "Unknown")
+            first_name = user_data.get("first_name", "Unknown")
+            last_name = user_data.get("last_name", "")
+            full_name = f"{first_name} {last_name}".strip() or "Unknown"
+            
+            admin_notification = (
+                f"📨 <b>YANGI KONTAKT XABARI</b>\n\n"
+                f"👤 <b>Foydalanuvchi:</b> {full_name}\n"
+                f"🏷️ <b>Username:</b> @{username}\n"
+                f"🆔 <b>User ID:</b> <code>{user_data.get('user_id', 'Unknown')}</code>\n"
+                f"🆔 <b>Chat ID:</b> <code>{chat_id}</code>\n\n"
+                f"💬 <b>Xabar:</b>\n{contact_text}\n\n"
+                f"<i>Javob berish uchun: </i><code>/reply {chat_id} [javob]</code>"
+            )
+            
+            # Send to all admin IDs if there are multiple
+            admin_ids = [ADMIN_ID.strip()] if ADMIN_ID and ADMIN_ID.strip() else []
+            for admin_id in admin_ids:
+                try:
+                    await context.bot.send_message(
+                        chat_id=int(admin_id),
+                        text=admin_notification,
+                        parse_mode=ParseMode.HTML
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send contact message to admin {admin_id}: {e}")
+            
+            await safe_reply(update, "✅ Xabaringiz adminga yuborildi! Tez orada javob berishadi.")
+            
+        except Exception as e:
+            logger.error(f"Failed to send contact message to admin: {e}")
+            await safe_reply(update, "❌ Xabar yuborishda xatolik yuz berdi. Qaytadan urinib ko'ring.")
+    else:
+        await safe_reply(update, "⚠️ Admin ID sozlanmagan. Xabar saqlandi, lekin adminga yuborilmadi.")
+
+# ─── 🔧 Reply Command (Admin Only) ─────────────────────────────────────────────────
+async def reply_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin can reply to specific users"""
+    if not update or not update.message or not update.effective_chat or not update.effective_user:
         return
     
     # Check if user is admin
-    admin_ids = [ADMIN_ID]  # Get admin ID from environment
+    admin_ids = [ADMIN_ID.strip()] if ADMIN_ID and ADMIN_ID.strip() else []
     user_id = str(update.effective_user.id)
     
     if user_id not in admin_ids:
-        await update.message.reply_text("❌ Bu buyruq faqat admin uchun!")
+        # Hide admin command from non-admin users - no response at all
+        return
+    
+    # Extract reply text
+    message_text = update.message.text
+    if not message_text or len(message_text.split(" ", 2)) < 3:
+        await safe_reply(update, "❓ Iltimos javob yuboring. Format: <code>/reply [chat_id] [xabaringiz]</code>")
+        return
+    
+    parts = message_text.split(" ", 2)
+    target_chat_id = parts[1]
+    admin_reply = parts[2]
+    
+    # Mark contact messages as replied
+    if target_chat_id in user_contact_messages:
+        for msg in user_contact_messages[target_chat_id]:
+            if not msg["replied"]:
+                msg["replied"] = True
+    
+    # Send reply to user
+    reply_msg = (
+        f"📞 <b>Admin Javobi</b>\n\n"
+        f"💬 <b>Xabar:</b>\n{admin_reply}\n\n"
+        f"<i>Kerak bo'lsa /contact bilan yana xabar yubora olasiz.</i>"
+    )
+    
+    try:
+        await context.bot.send_message(
+            chat_id=int(target_chat_id),
+            text=reply_msg,
+            parse_mode=ParseMode.HTML
+        )
+        
+        await safe_reply(update, f"✅ Javob muvaffaqiyatli yuborildi foydalanuvchiga: {target_chat_id}")
+    except Exception as e:
+        logger.error(f"Failed to send reply to user {target_chat_id}: {e}")
+        await safe_reply(update, f"❌ Javob yuborishda xatolik yuz berdi. Foydalanuvchi {target_chat_id} botni bloklagandir.")
+
+# ─── 🛠️ System Monitor Command (Admin Only) ─────────────────────────────────────
+async def system_monitor_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Monitor system health and performance (admin only)"""
+    if not update or not update.message or not update.effective_chat or not update.effective_user:
+        return
+    
+    # Check if user is admin
+    admin_ids = [ADMIN_ID.strip()] if ADMIN_ID and ADMIN_ID.strip() else []
+    user_id = str(update.effective_user.id)
+    
+    if user_id not in admin_ids:
+        # Hide admin command from non-admin users - no response at all
         return
     
     # Perform cleanup and get metrics
@@ -1141,142 +1272,7 @@ async def system_monitor_command(update: Update, context: ContextTypes.DEFAULT_T
     
     monitor_text += "\n<i>🔄 Har yangi foydalanuvchida avtomatik tozalash ishlaydi</i>"
     
-    await update.message.reply_text(monitor_text, parse_mode=ParseMode.HTML)
-
-# Contact System Functions
-async def contact_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Users can send messages to admin"""
-    if not update.message or not update.effective_chat:
-        return
-        
-    chat_id = str(update.effective_chat.id)
-    text = update.message.text.strip()
-    parts = text.split(" ", 1)
-    
-    if len(parts) < 2:
-        await update.message.reply_text(
-            "📞 <b>Admin bilan bog'lanish:</b>\n\n"
-            "<code>/contact Sizning xabaringiz</code>\n\n"
-            "Bu sizning xabaringizni to'g'ridan-to'g'ri adminga yuboradi.",
-            parse_mode=ParseMode.HTML
-        )
-        return
-    
-    user_message = parts[1]
-    
-    # Store contact message
-    if chat_id not in user_contact_messages:
-        user_contact_messages[chat_id] = []
-    
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    contact_msg = {
-        "message": user_message,
-        "timestamp": timestamp,
-        "replied": False
-    }
-    user_contact_messages[chat_id].append(contact_msg)
-    
-    # Get user info
-    user_data = user_info.get(chat_id, {})
-    username = user_data.get("username", "Unknown")
-    first_name = user_data.get("first_name", "Unknown")
-    
-    # Send to admin
-    admin_msg = (
-        f"📞 <b>YANGI MUROJAAT XABARI</b>\n\n"
-        f"👤 <b>Kimdan:</b> {first_name}"
-    )
-    if username:
-        admin_msg += f" (@{username})"
-    admin_msg += (
-        f"\n🆔 <b>Chat ID:</b> <code>{chat_id}</code>\n"
-        f"⏰ <b>Vaqt:</b> {timestamp}\n\n"
-        f"💬 <b>Xabar:</b>\n{user_message}\n\n"
-        f"<i>Javob berish: /reply {chat_id} [javobingiz]</i>"
-    )
-    
-    try:
-        await context.bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
-            text=admin_msg,
-            parse_mode=ParseMode.HTML
-        )
-        
-        await update.message.reply_text(
-            "✅ <b>Xabar adminga yuborildi!</b>\n\n"
-            "📱 Admin sizning xabaringizni oladi va tez orada javob berishi mumkin.\n\n"
-            "<i>Biz bilan bog'langaningiz uchun rahmat!</i>",
-            parse_mode=ParseMode.HTML
-        )
-    except Exception as e:
-        logger.error(f"Failed to send contact message to admin: {e}")
-        await update.message.reply_text(
-            "❌ <b>Xabar yuborishda xatolik</b>\n\n"
-            "Iltimos keyinroq qaytadan urinib ko'ring yoki to'g'ridan-to'g'ri qo'llab-quvvatlash bilan bog'laning.",
-            parse_mode=ParseMode.HTML
-        )
-
-async def reply_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin can reply to specific users"""
-    if not update.message or not update.effective_chat:
-        return
-    
-    # Check if user is admin
-    admin_ids = [ADMIN_ID]  # Get admin ID from environment
-    user_id = str(update.effective_user.id)
-    
-    if user_id not in admin_ids:
-        await update.message.reply_text("❌ Bu buyruq faqat admin uchun!")
-        return
-    
-    text = update.message.text.strip()
-    parts = text.split(" ", 2)
-    
-    if len(parts) < 3:
-        await update.message.reply_text(
-            "📤 <b>Foydalanuvchiga javob berish:</b>\n\n"
-            "<code>/reply [chat_id] [sizning xabaringiz]</code>\n\n"
-            "Bu sizning xabaringizni belgilangan foydalanuvchiga yuboradi.",
-            parse_mode=ParseMode.HTML
-        )
-        return
-    
-    target_chat_id = parts[1]
-    admin_reply = parts[2]
-    
-    # Mark contact messages as replied
-    if target_chat_id in user_contact_messages:
-        for msg in user_contact_messages[target_chat_id]:
-            if not msg["replied"]:
-                msg["replied"] = True
-    
-    # Send reply to user
-    reply_msg = (
-        f"📞 <b>Admin Javobi</b>\n\n"
-        f"💬 <b>Xabar:</b>\n{admin_reply}\n\n"
-        f"<i>Kerak bo'lsa /contact bilan yana xabar yubora olasiz.</i>"
-    )
-    
-    try:
-        await context.bot.send_message(
-            chat_id=int(target_chat_id),
-            text=reply_msg,
-            parse_mode=ParseMode.HTML
-        )
-        
-        await update.message.reply_text(
-            f"✅ <b>Javob muvaffaqiyatli yuborildi!</b>\n\n"
-            f"📤 Foydalanuvchiga yuborildi: <code>{target_chat_id}</code>\n"
-            f"💬 Xabar: {admin_reply[:100]}{'...' if len(admin_reply) > 100 else ''}",
-            parse_mode=ParseMode.HTML
-        )
-    except Exception as e:
-        logger.error(f"Failed to send reply to user {target_chat_id}: {e}")
-        await update.message.reply_text(
-            f"❌ <b>Javob yuborishda xatolik</b>\n\n"
-            f"Foydalanuvchi {target_chat_id} botni bloklagandir yoki chat ID noto'g'ri.",
-            parse_mode=ParseMode.HTML
-        )
+    await safe_reply(update, monitor_text, parse_mode=ParseMode.HTML)
 
 # ─── 📌 Handlers ───────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1317,7 +1313,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     # Check if user is admin and add admin commands to help
-    admin_ids = [ADMIN_ID]  # Get admin ID from environment
+    admin_ids = [ADMIN_ID.strip()] if ADMIN_ID and ADMIN_ID.strip() else []
     user_id = str(update.effective_user.id)
     
     if user_id in admin_ids:
@@ -1335,8 +1331,94 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await send_typing(update)
-        chat_id = str(update.effective_chat.id)
-        message = update.message.text.strip()
+        chat_id = str(update.effective_chat.id) if update and update.effective_chat else "unknown"
+        message = update.message.text.strip() if update and update.message and update.message.text else ""
+
+        # Check if user is in a conversational flow
+        if chat_id in user_states:
+            state = user_states[chat_id]
+            
+            # Handle contact flow - user has sent their message after being prompted
+            if state == "awaiting_contact_message":
+                # Remove user from flow state
+                del user_states[chat_id]
+                
+                # Send message to admin
+                if ADMIN_ID and ADMIN_ID.strip():
+                    try:
+                        user_data = user_info.get(chat_id, {})
+                        username = user_data.get("username", "Unknown")
+                        first_name = user_data.get("first_name", "Unknown")
+                        last_name = user_data.get("last_name", "")
+                        full_name = f"{first_name} {last_name}".strip() or "Unknown"
+                        
+                        admin_notification = (
+                            f"📨 <b>YANGI KONTAKT XABARI</b>\n\n"
+                            f"👤 <b>Foydalanuvchi:</b> {full_name}\n"
+                            f"🏷️ <b>Username:</b> @{username}\n"
+                            f"🆔 <b>User ID:</b> <code>{user_data.get('user_id', 'Unknown')}</code>\n"
+                            f"🆔 <b>Chat ID:</b> <code>{chat_id}</code>\n\n"
+                            f"💬 <b>Xabar:</b>\n{message}\n\n"
+                            f"<i>Javob berish uchun: </i><code>/reply {chat_id} [javob]</code>"
+                        )
+                        
+                        # Send to all admin IDs if there are multiple
+                        admin_ids = [ADMIN_ID.strip()] if ADMIN_ID and ADMIN_ID.strip() else []
+                        for admin_id in admin_ids:
+                            try:
+                                await context.bot.send_message(
+                                    chat_id=int(admin_id),
+                                    text=admin_notification,
+                                    parse_mode=ParseMode.HTML
+                                )
+                            except Exception as e:
+                                logger.error(f"Failed to send contact message to admin {admin_id}: {e}")
+                        
+                        await safe_reply(update, "✅ Xabaringiz adminga yuborildi! Tez orada javob berishadi.")
+                        
+                    except Exception as e:
+                        logger.error(f"Failed to send contact message to admin: {e}")
+                        await safe_reply(update, "❌ Xabar yuborishda xatolik yuz berdi. Qaytadan urinib ko'ring.")
+                else:
+                    await safe_reply(update, "⚠️ Admin ID sozlanmagan. Xabar saqlandi, lekin adminga yuborilmadi.")
+                return
+            
+            # Handle search flow - user has sent their search query after being prompted
+            elif state == "awaiting_search_query":
+                # Remove user from flow state
+                del user_states[chat_id]
+                
+                # Track search activity
+                track_user_activity(chat_id, "search_queries", update)
+                result = await search_web(message)
+                if result:  # Check if result is not None
+                    await send_long_message(update, f"<b>🔎 Qidiruv natijalari:</b>\n{result}")
+                else:
+                    await safe_reply(update, "❌ Qidiruvda xatolik yuz berdi.")
+                return
+
+        # Handle keyboard button presses for conversational flows
+        if message == "📞 Kontakt":
+            await safe_reply(update, "📞 Admin uchun xabaringizni yozing:")
+            user_states[chat_id] = "awaiting_contact_message"
+            return
+            
+        elif message == "🔍 Qidiruv":
+            await safe_reply(update, "🔍 Qidirish uchun so'rov kiriting:")
+            user_states[chat_id] = "awaiting_search_query"
+            return
+            
+        elif message == "📊 Statistika":
+            await stats_command(update, context)
+            return
+            
+        elif message == "🔄 Qayta ishga tushirish":
+            await start(update, context)
+            return
+            
+        elif message == "ℹ️ Yordam":
+            await help_command(update, context)
+            return
 
         # Handle stats command
         if message.lower() == "/stats":
@@ -1351,9 +1433,74 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Track search activity
                 track_user_activity(chat_id, "search_queries", update)
                 result = await search_web(query)
-                await send_long_message(update, f"<b>🔎 Qidiruv natijalari:</b>\n{result}")
+                if result:  # Check if result is not None
+                    await send_long_message(update, f"<b>🔎 Qidiruv natijalari:</b>\n{result}")
+                else:
+                    await safe_reply(update, "❌ Qidiruvda xatolik yuz berdi.")
             else:
                 await safe_reply(update, "❓ Iltimos qidiruv so'rovini kiriting. Misol: <code>/search Ibn Sina</code>")
+            return
+
+        # Handle contact command
+        if message.lower().startswith("/contact"):
+            # Extract message text
+            if len(message.split(" ", 1)) < 2:
+                await safe_reply(update, "❓ Iltimos adminga yubormoqchi bo'lgan xabaringizni kiriting. Misol: <code>/contact Yordam kerak</code>")
+                return
+            
+            contact_text = message.split(" ", 1)[1]
+            
+            # Store contact message
+            if chat_id not in user_contact_messages:
+                user_contact_messages[chat_id] = []
+            
+            contact_message = {
+                "message": contact_text,
+                "timestamp": time.time(),
+                "user_info": user_info.get(chat_id, {}),
+                "replied": False
+            }
+            
+            user_contact_messages[chat_id].append(contact_message)
+            
+            # Send to admin if admin ID is set
+            if ADMIN_ID and ADMIN_ID.strip():
+                try:
+                    user_data = user_info.get(chat_id, {})
+                    username = user_data.get("username", "Unknown")
+                    first_name = user_data.get("first_name", "Unknown")
+                    last_name = user_data.get("last_name", "")
+                    full_name = f"{first_name} {last_name}".strip() or "Unknown"
+                    
+                    admin_notification = (
+                        f"📨 <b>YANGI KONTAKT XABARI</b>\n\n"
+                        f"👤 <b>Foydalanuvchi:</b> {full_name}\n"
+                        f"🏷️ <b>Username:</b> @{username}\n"
+                        f"🆔 <b>User ID:</b> <code>{user_data.get('user_id', 'Unknown')}</code>\n"
+                        f"🆔 <b>Chat ID:</b> <code>{chat_id}</code>\n\n"
+                        f"💬 <b>Xabar:</b>\n{contact_text}\n\n"
+                        f"<i>Javob berish uchun: </i><code>/reply {chat_id} [javob]</code>"
+                    )
+                    
+                    # Send to all admin IDs if there are multiple
+                    admin_ids = [ADMIN_ID.strip()] if ADMIN_ID and ADMIN_ID.strip() else []
+                    for admin_id in admin_ids:
+                        try:
+                            await context.bot.send_message(
+                                chat_id=int(admin_id),
+                                text=admin_notification,
+                                parse_mode=ParseMode.HTML
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to send contact message to admin {admin_id}: {e}")
+                    
+                    await safe_reply(update, "✅ Xabaringiz adminga yuborildi! Tez orada javob berishadi.")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to send contact message to admin: {e}")
+                    await safe_reply(update, "❌ Xabar yuborishda xatolik yuz berdi. Qaytadan urinib ko'ring.")
+            else:
+                await safe_reply(update, "⚠️ Admin ID sozlanmagan. Xabar saqlandi, lekin adminga yuborilmadi.")
             return
 
         # Gemini chat with memory context
@@ -1368,9 +1515,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         try:
             reply = await ask_gemini(history, chat_id)  # Pass chat_id for memory context
-            history.append({"role": "model", "content": reply})
-            user_history[chat_id] = history[-MAX_HISTORY * 2:]
-            await send_long_message(update, reply)
+            if reply:  # Only add to history if we got a reply
+                history.append({"role": "model", "content": reply})
+                user_history[chat_id] = history[-MAX_HISTORY * 2:]
+                await send_long_message(update, reply)
+            else:
+                await safe_reply(update, "⚙️ Hozircha javob bera olmayapman. Biroz kutib, qaytadan urinib ko'ring.")
         except Exception as gemini_error:
             logger.error(f"Gemini processing error: {gemini_error}")
             await safe_reply(update, "⚙️ Hozircha javob bera olmayapman. Biroz kutib, qaytadan urinib ko'ring.")
@@ -1383,6 +1533,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
+        if not update or not update.message or not update.message.photo:
+            return
         await send_typing(update)
         file = await context.bot.get_file(update.message.photo[-1].file_id)
 
@@ -1404,8 +1556,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ])),
                 timeout=30  # Increased timeout
             )
-            reply = response.text.strip()
-            chat_id = str(update.effective_chat.id)
+            reply = response.text.strip() if response and response.text else ""
+            chat_id = str(update.effective_chat.id) if update and update.effective_chat else "unknown"
             
             # Track photo activity
             track_user_activity(chat_id, "photos", update)
@@ -1435,8 +1587,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
+        if not update or not update.message or not (update.message.voice or update.message.audio):
+            return
         await send_typing(update)
         voice = update.message.voice or update.message.audio
+        if not voice or not voice.file_id:
+            return
         file = await context.bot.get_file(voice.file_id)
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".oga") as tmp_file:
@@ -1451,14 +1607,14 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             response = await asyncio.wait_for(
                 asyncio.to_thread(lambda: model.generate_content([
                     {"role": "user", "parts": [
-                        "The user sent an audio message. Listen to it and respond awesomely like a friend who listened to their voice message. Be warm, friendly and engaging. Use emojis and nice formatting. Answer in Uzbek if the user speaks Uzbek, otherwise use appropriate language."
+                        "The user sent an audio message. Listen to it and respond awesomely like a friend who listened to their voice message. Don't repeat what the user said! Be warm, friendly and engaging. Use emojis and nice formatting. Answer in Uzbek if the user speaks Uzbek, otherwise use appropriate language."
                     ]},
                     {"role": "user", "parts": [uploaded]}
                 ])),
                 timeout=30
             )
-            reply = response.text.strip()
-            chat_id = str(update.effective_chat.id)
+            reply = response.text.strip() if response and response.text else ""
+            chat_id = str(update.effective_chat.id) if update and update.effective_chat else "unknown"
             
             # Track voice activity
             track_user_activity(chat_id, "voice_audio", update)
@@ -1486,40 +1642,16 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Unexpected error in handle_voice: {e}")
 
-    try:
-        uploaded = await asyncio.wait_for(
-            asyncio.to_thread(lambda: genai.upload_file(tmp_path)),
-            timeout=20
-        )
-        response = await asyncio.wait_for(
-            asyncio.to_thread(lambda: model.generate_content([
-                {"role": "user", "parts": [
-                    "The user sent a voice message. Understand and reply like you're talking back — not transcribing. Just continue the conversation warmly. Use Emojis + <i>/<b>/<u> formatting awesomely."
-                ]},
-                {"role": "user", "parts": [uploaded]}
-            ])),
-            timeout=20
-        )
-        reply = response.text.strip()
-        chat_id = str(update.effective_chat.id)
-        
-        # Track voice/audio activity
-        track_user_activity(chat_id, "voice_audio", update)
-        
-        # Store audio content in memory for future reference
-        store_content_memory(chat_id, "audio", reply)
-        
-        user_history.setdefault(chat_id, []).append({"role": "user", "content": "[sent voice 🎙️]"})
-        user_history[chat_id].append({"role": "model", "content": reply})
-        await send_long_message(update, reply)
-    finally:
-        os.remove(tmp_path)
-
 # ─── 🚀 Start Bot ──────────────────────────────────────────────
 def main():
+    # Check if required environment variables are set
+    if not TELEGRAM_TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN environment variable not set")
+        return
+        
     # Create application with enhanced error handling and proper configuration
     app = (Application.builder()
-           .token(TELEGRAM_TOKEN)
+           .token(str(TELEGRAM_TOKEN))  # Convert to string to ensure type safety
            .read_timeout(30)
            .write_timeout(30)
            .connect_timeout(30)
@@ -1534,7 +1666,7 @@ def main():
     app.add_handler(CommandHandler("contact", contact_command))  # Contact admin
     app.add_handler(CommandHandler("reply", reply_command))  # Admin reply
     app.add_handler(CommandHandler("broadcast", broadcast_command))  # Admin broadcast
-    app.add_handler(CommandHandler("update", send_update_broadcast))  # Quick update broadcast
+    app.add_handler(CommandHandler("update", update_command))  # Quick update broadcast
     app.add_handler(CommandHandler("adminstats", admin_stats_command))  # Admin statistics
     app.add_handler(CommandHandler("monitor", system_monitor_command))  # System monitoring
     app.add_handler(CommandHandler("search", handle_text))
