@@ -11,7 +11,7 @@ from telegram import Update, Document
 from telegram.constants import ChatAction, ParseMode
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
-    ContextTypes, filters
+    ContextTypes, filters, ChatMemberHandler
 )
 from telegram.error import NetworkError, TelegramError, TimedOut, RetryAfter
 import google.generativeai as genai
@@ -37,6 +37,7 @@ user_stats = {}  # Track detailed user statistics
 user_info = {}  # Store user information (username, first_name, etc.)
 user_contact_messages = {}  # Store contact messages from users to admin
 user_daily_activity = {}  # Track daily activity for analytics
+blocked_users = set()  # Track users who have blocked the bot
 MAX_HISTORY = 100
 MAX_CONTENT_MEMORY = 50  # Store more content items
 MAX_USERS_IN_MEMORY = 2000  # Limit to prevent memory overflow
@@ -73,14 +74,35 @@ def main_menu_keyboard():
 
 
 # ─── 🛡️ Safe Communication Functions ──────────────────────────────────────
+# Helper functions for safely working with media files
+async def get_video_thumbnail(video, context):
+    """Safely get thumbnail file from a video, handling API differences"""
+    try:
+        # Try standard property name
+        if hasattr(video, "thumbnail") and video.thumbnail:
+            return await context.bot.get_file(video.thumbnail.file_id)
+        # Try legacy property name
+        elif hasattr(video, "thumb") and video.thumb:
+            return await context.bot.get_file(video.thumb.file_id)
+        # No thumbnail available
+        return None
+    except Exception as e:
+        logger.warning(f"Error getting video thumbnail: {e}")
+        return None
+
+async def has_video_thumbnail(video):
+    """Check if video has a thumbnail, handling API differences"""
+    return (hasattr(video, "thumbnail") and video.thumbnail is not None) or \
+           (hasattr(video, "thumb") and video.thumb is not None)
+
 async def safe_reply(update: Update, text: str, parse_mode=ParseMode.HTML, max_retries=3):
     """Safely send reply with automatic retry and fallback"""
     if not update or not update.message:
-        return False
+        return None
     for attempt in range(max_retries):
         try:
-            await update.message.reply_text(text, parse_mode=parse_mode)
-            return True
+            message = await update.message.reply_text(text, parse_mode=parse_mode)
+            return message  # Return the message object, not a boolean
         except RetryAfter as e:
             wait_time = e.retry_after + 1
             logger.warning(f"Rate limited, waiting {wait_time} seconds (attempt {attempt + 1})")
@@ -93,27 +115,57 @@ async def safe_reply(update: Update, text: str, parse_mode=ParseMode.HTML, max_r
             else:
                 # Final attempt with plain text
                 try:
-                    await update.message.reply_text(text)
-                    return True
+                    message = await update.message.reply_text(text)
+                    return message  # Return the message object, not a boolean
                 except Exception:
                     logger.error("All retry attempts failed")
-                    return False
+                    return None
         except Exception as e:
             logger.error(f"Unexpected error in safe_reply: {e}")
-            return False
-    return False
+            return None
+    return None
 
 async def safe_edit_message(message, text: str, parse_mode=ParseMode.HTML, max_retries=3):
-    """Safely edit message with automatic retry"""
+    """Safely edit message with automatic retry and handle long messages"""
+    # Check if message is a valid message object
+    if not message or isinstance(message, bool):
+        logger.warning("Invalid message object for editing")
+        return False
+    
+    # Clean HTML tags and check length
+    cleaned_text = clean_html(text)
+    
+    # If message is too long for Telegram (4096 chars), truncate or send as new message
+    if len(cleaned_text) > 4096:
+        logger.warning(f"Message too long ({len(cleaned_text)} chars), truncating for edit")
+        # Truncate to fit within Telegram's limit with a warning message
+        truncated_text = cleaned_text[:4000] + "\n\n<i>⚠️ Javob uzunligi sababli qisqartirildi...</i>"
+        text = truncated_text
+    
     for attempt in range(max_retries):
         try:
-            await message.edit_text(text, parse_mode=parse_mode)
-            return True
+            edited_message = await message.edit_text(text, parse_mode=parse_mode)
+            return edited_message
         except RetryAfter as e:
             wait_time = e.retry_after + 1
             logger.warning(f"Rate limited on edit, waiting {wait_time} seconds")
             await asyncio.sleep(wait_time)
         except (NetworkError, TelegramError, TimedOut) as e:
+            # Handle Message_too_long specifically
+            if "Message_too_long" in str(e):
+                logger.warning(f"Message still too long after truncation, sending as new message")
+                # If we can't edit due to length, send as a new message instead
+                try:
+                    if hasattr(message, 'chat_id'):
+                        await message.get_bot().send_message(
+                            chat_id=message.chat_id,
+                            text=text[:4096],  # Ensure it's within limit
+                            parse_mode=parse_mode
+                        )
+                        return True
+                except Exception as send_error:
+                    logger.error(f"Failed to send as new message: {send_error}")
+            
             logger.warning(f"Telegram error on edit attempt {attempt + 1}: {e}")
             if attempt < max_retries - 1:
                 await asyncio.sleep(2 ** attempt)
@@ -140,23 +192,49 @@ async def send_long_message(update: Update, text: str):
     if not update or not update.message:
         return
     text = clean_html(text)
-    for i in range(0, len(text), 4096):
+    # Split message into chunks of 4096 characters or less
+    chunks = []
+    while len(text) > 4096:
+        # Try to split at a newline or space near the limit to avoid cutting words
+        split_pos = 4096
+        # Look for a good split point (newline or space)
+        for pos in range(4096, max(4096-200, 0), -1):
+            if text[pos] == '\n':
+                split_pos = pos
+                break
+            elif text[pos] == ' ' and split_pos == 4096:
+                split_pos = pos
+        
+        chunks.append(text[:split_pos])
+        text = text[split_pos:].lstrip()  # Remove leading whitespace from next chunk
+    
+    # Add the last chunk if there's remaining text
+    if text:
+        chunks.append(text)
+    
+    # Send all chunks
+    for i, chunk in enumerate(chunks):
         try:
-            await update.message.reply_text(text[i:i+4096], parse_mode=ParseMode.HTML)
-            await asyncio.sleep(0.3)  # Increased delay to prevent rate limiting
+            await update.message.reply_text(chunk, parse_mode=ParseMode.HTML)
+            # Add delay between messages except for the last one
+            if i < len(chunks) - 1:
+                await asyncio.sleep(0.3)  # Increased delay to prevent rate limiting
         except RetryAfter as e:
             logger.warning(f"Rate limited, waiting {e.retry_after} seconds")
             await asyncio.sleep(e.retry_after + 1)
             try:
-                await update.message.reply_text(text[i:i+4096], parse_mode=ParseMode.HTML)
+                await update.message.reply_text(chunk, parse_mode=ParseMode.HTML)
+                if i < len(chunks) - 1:
+                    await asyncio.sleep(0.3)
             except Exception:
-                await update.message.reply_text(text[i:i+4096])  # Fallback to plain text
+                await update.message.reply_text(chunk)  # Fallback to plain text
         except (NetworkError, TelegramError, TimedOut) as e:
             logger.error(f"Failed to send message chunk: {e}")
             try:
                 # Fallback: send as plain text
-                await update.message.reply_text(text[i:i+4096])
-                await asyncio.sleep(0.3)
+                await update.message.reply_text(chunk)
+                if i < len(chunks) - 1:
+                    await asyncio.sleep(0.3)
             except Exception as fallback_error:
                 logger.error(f"Fallback message also failed: {fallback_error}")
                 break
@@ -188,6 +266,30 @@ async def search_web(query: str) -> str:
     except Exception as e:
         logger.error(f"Search error: {e}")
         return "❌ Qidiruvda xatolik yuz berdi."
+
+# ─── 🚫 Bot Blocking Detection ──────────────────────────────────────
+async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle my_chat_member updates to detect when users block/unblock the bot"""
+    if not update or not update.my_chat_member:
+        return
+        
+    cmu = update.my_chat_member
+    chat = cmu.chat
+    old_status = cmu.old_chat_member.status
+    new_status = cmu.new_chat_member.status  # "kicked" when blocked, "member" when unblocked
+    chat_id = str(chat.id)
+    
+    if chat.type == chat.PRIVATE:
+        if new_status == "kicked":
+            # User blocked/stopped the bot -> mark inactive in DB
+            blocked_users.add(chat_id)
+            logger.info(f"User {chat_id} has blocked the bot")
+            # Optionally, you can also remove user data or mark as inactive in your database
+        elif new_status == "member" and old_status == "kicked":
+            # User unblocked/started -> mark active in DB
+            if chat_id in blocked_users:
+                blocked_users.remove(chat_id)
+            logger.info(f"User {chat_id} has unblocked the bot")
 
 # ─── 📊 User Statistics Tracking ─────────────────────────────────────────────────
 def cleanup_inactive_users():
@@ -347,6 +449,8 @@ def get_content_context(chat_id: str) -> str:
             context_parts.append(f"Audio message: {item['summary'][:200]}...")
         elif item["type"] == "photo":
             context_parts.append(f"Photo: {item['summary'][:200]}...")
+        elif item["type"] == "video":
+            context_parts.append(f"Video: {item['summary'][:200]}...")
     
     if context_parts:
         return "\n\nPrevious content user shared: " + " | ".join(context_parts)
@@ -362,7 +466,7 @@ async def ask_gemini(history, chat_id: str | None = None, max_retries=3):
             content_context = get_content_context(chat_id) if chat_id else ""
             
             base_instruction = (
-                "You are a smart friend. Remember your name is AQLJON . Don't repeat what the user said. Reply casually with humor and warmth 😊. "
+                "You are a smart friend. Remember your name is AQLJON and you should be like a Muslim friend to the user. Don't repeat what the user said. Reply casually with humor and warmth 😊. "
                 "Awesomely answer with formatting <b>, <i>, <u> and emojis 🧠. Be warm, creative, helpful, friendly! Answer in Uzbek if the user speaks Uzbek. Otherwise use appropriate language."
             )
             
@@ -497,19 +601,22 @@ async def process_document_background(document: Document, chat_id: str, analyzin
                 user_history[chat_id].append({"role": "model", "content": reply})
                 
                 # Update the analyzing message with results
-                await analyzing_msg.edit_text(
+                await safe_edit_message(
+                    analyzing_msg,
                     f"📄 <b>Hujjat tahlil natijasi:</b>\n\n{reply}",
                     parse_mode=ParseMode.HTML
                 )
             else:
-                await analyzing_msg.edit_text(
+                await safe_edit_message(
+                    analyzing_msg,
                     "❌ Hujjat tahlilida xatolik yuz berdi. Qaytadan urinib ko'ring.",
                     parse_mode=ParseMode.HTML
                 )
         
         except asyncio.TimeoutError:
             logger.error("Document processing timeout")
-            await analyzing_msg.edit_text(
+            await safe_edit_message(
+                analyzing_msg,
                 "⏰ Hujjat tahlili juda uzoq davom etdi. Iltimos, kichikroq hujjat yuboring.",
                 parse_mode=ParseMode.HTML
             )
@@ -527,12 +634,12 @@ async def process_document_background(document: Document, chat_id: str, analyzin
             else:
                 error_msg += "\n🔄 Qaytadan urinib ko'ring yoki boshqa hujjat yuboring."
             
-            await analyzing_msg.edit_text(error_msg, parse_mode=ParseMode.HTML)
+            await safe_edit_message(analyzing_msg, error_msg, parse_mode=ParseMode.HTML)
         
         finally:
             # Always clean up temp file
             try:
-                if os.path.exists(tmp_path):
+                if tmp_path is not None and os.path.exists(tmp_path):
                     os.unlink(tmp_path)
             except Exception as cleanup_error:
                 logger.warning(f"Failed to cleanup temp file: {cleanup_error}")
@@ -540,16 +647,17 @@ async def process_document_background(document: Document, chat_id: str, analyzin
     except Exception as e:
         logger.error(f"Document handler error: {e}")
         try:
-            await analyzing_msg.edit_text(
+            await safe_edit_message(
+                analyzing_msg,
                 "❌ Hujjat yuklashda xatolik yuz berdi. Iltimos qaytadan urinib ko'ring.",
                 parse_mode=ParseMode.HTML
             )
         except:
             pass
 
-# ─── 🎬 Enhanced Video Analysis (Non-Blocking) ─────────────────────────────────────
+# ─── 🎬 Simplified Video Analysis ─────────────────────────────────────
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle video uploads and analysis with non-blocking processing."""
+    """Handle video uploads and analysis with simplified processing."""
     if not update or not update.message or not update.message.video:
         return
         
@@ -557,61 +665,48 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     video = update.message.video
     chat_id = str(update.effective_chat.id) if update and update.effective_chat else "unknown"
     
-    # Immediate response - don't block other users
+    # Check file size (limit to 20MB)
+    if video.file_size and video.file_size > 20 * 1024 * 1024:
+        await update.message.reply_text(
+            "❌ <b>Video juda katta!</b>\n\n"
+            "🔍 <i>Bot faqat 20MB gacha bo'lgan videolarni tahlil qila oladi.</i>\n\n"
+            "💡 <i>Kichikroq video yuboring.</i>",
+            parse_mode=ParseMode.HTML
+        )
+        track_user_activity(chat_id, "videos", update)
+        return
+    
+    # Immediate response to user
     analyzing_msg = await update.message.reply_text(
         "🎬 <b>Video qabul qilindi!</b>\n\n"
-        "⏳ <i>Tahlil qilinmoqda... Boshqa savollaringizni yuboring, men javob beraman!</i>\n\n"
-        "📱 <i>Video tahlili tayyor bo'lganda yuboraman.</i>",
+        "⏳ <i>Video tahlil qilinmoqda... Biroz kuting!</i>",
         parse_mode=ParseMode.HTML
     )
     
-    # Process video in background - don't await it!
+    # Process video in background
     asyncio.create_task(process_video_background(
         video, chat_id, analyzing_msg, update, context
     ))
     
-    # Immediately track activity and return - don't block!
+    # Track activity
     track_user_activity(chat_id, "videos", update)
 
 async def process_video_background(video, chat_id: str, analyzing_msg, update: Update, context):
-    """Process video in background without blocking other users"""
+    """Process video in background with simplified approach"""
+    tmp_path = None
     try:
-        # Check file size (limit to 50MB for videos)
-        if video.file_size and video.file_size > 50 * 1024 * 1024:
-            await analyzing_msg.edit_text(
-                "❌ Video juda katta. Maksimal hajm: 50MB",
-                parse_mode=ParseMode.HTML
-            )
-            return
-        
-        # Check video duration (limit to 10 minutes)
-        if video.duration and video.duration > 600:  # 10 minutes
-            await analyzing_msg.edit_text(
-                "❌ Video juda uzun. Maksimal davomiyligi: 10 daqiqa",
-                parse_mode=ParseMode.HTML
-            )
-            return
-        
+        # Download video file
         file = await context.bot.get_file(video.file_id)
         
-        # Create temporary file with proper extension
-        file_extension = ".mp4"  # Default to mp4
-        if video.mime_type:
-            if "webm" in video.mime_type:
-                file_extension = ".webm"
-            elif "mov" in video.mime_type:
-                file_extension = ".mov"
-            elif "avi" in video.mime_type:
-                file_extension = ".avi"
-        
-        with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_file:
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file:
             tmp_path = tmp_file.name
         
         try:
             # Download file with timeout
             await asyncio.wait_for(
                 file.download_to_drive(custom_path=tmp_path),
-                timeout=60  # 1 minute timeout for download
+                timeout=60
             )
             
             # Wait a moment for file to be fully written
@@ -621,62 +716,81 @@ async def process_video_background(video, chat_id: str, analyzing_msg, update: U
             if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) == 0:
                 raise Exception("Video file download failed or is empty")
             
-            # Process with Gemini in separate thread
+            # Process with Gemini
             def process_with_gemini():
                 try:
                     # Upload to Gemini
                     uploaded = genai.upload_file(tmp_path)
                     
-                    # Wait for processing
-                    import time
-                    time.sleep(3)  # Give Gemini time to process
+                    # Wait for processing with proper state checking
+                    timeout = 30  # 30 second timeout
+                    interval = 2   # Check every 2 seconds
+                    elapsed = 0
                     
-                    # Generate response
+                    # Wait for file to be in ACTIVE state
+                    while uploaded.state.name != "ACTIVE" and elapsed < timeout:
+                        if uploaded.state.name == "FAILED":
+                            raise Exception(f"File processing failed: {uploaded.state}")
+                        time.sleep(interval)
+                        elapsed += interval
+                        # Refresh file state
+                        uploaded = genai.get_file(uploaded.name)
+                    
+                    if uploaded.state.name != "ACTIVE":
+                        raise Exception(f"File processing timed out. Final state: {uploaded.state.name}")
+                    
+                    # Generate response with user context
+                    content_context = get_content_context(chat_id)
+                    instruction = (
+                        "The user sent a video. Analyze the video and respond to the user in a friendly, "
+                        "conversational manner with emojis and nice formatting. If video contains harmful or illicit content then say it is not allowed and that u cant answer for that. Answer in Uzbek if the user "
+                        "speaks Uzbek. Otherwise use appropriate language. " + content_context
+                    )
+                    
                     response = model.generate_content([
-                        {"role": "user", "parts": [
-                            "The user sent a video. Watch and analyze it like a close friend who's genuinely interested and excited to see what they shared! Give a warm, personal, and engaging response about what you see. Be creative, friendly, helpful, use emojis, and react naturally like you're chatting with a good friend. Don't be robotic or give technical descriptions - just be genuine and friendly! Answer in Uzbek if the user speaks Uzbek, otherwise use appropriate language."
-                        ]},
+                        {"role": "user", "parts": [instruction]},
                         {"role": "user", "parts": [uploaded]}
                     ])
                     
-                    return response.text.strip() if response and response.text else "🎬 Video juda qiziq edi! Lekin to'liq tahlil qila olmadim."
+                    return response.text.strip() if response and response.text else "🎬 Videoni tahlil qila olmadim."
                 except Exception as e:
                     logger.error(f"Gemini processing error: {e}")
                     return None
             
-            # Run Gemini processing in thread pool with timeout
+            # Run processing with timeout
             try:
                 reply = await asyncio.wait_for(
                     asyncio.to_thread(process_with_gemini),
-                    timeout=45  # 45 second timeout
+                    timeout=45
                 )
             except asyncio.TimeoutError:
                 reply = None
             
             if reply:
-                # Store video analysis in memory for future reference
-                video_duration = video.duration if video.duration else "unknown"
-                video_summary = f"Video ({video_duration}s): {reply[:200]}..."
-                store_content_memory(chat_id, "video", video_summary, f"video_{video.file_id[:8]}.mp4")
+                # Store video content in memory for future reference
+                store_content_memory(chat_id, "video", reply, video.file_name if video.file_name else "unknown")
                 
-                user_history.setdefault(chat_id, []).append({"role": "user", "content": "[sent video 🎬]"})
+                user_history.setdefault(chat_id, []).append({"role": "user", "content": f"[uploaded video: {video.file_name if video.file_name else 'unknown'}]"})
                 user_history[chat_id].append({"role": "model", "content": reply})
                 
                 # Update the analyzing message with results
-                await analyzing_msg.edit_text(
+                await safe_edit_message(
+                    analyzing_msg,
                     f"🎬 <b>Video tahlil natijasi:</b>\n\n{reply}",
                     parse_mode=ParseMode.HTML
                 )
             else:
-                await analyzing_msg.edit_text(
+                await safe_edit_message(
+                    analyzing_msg,
                     "❌ Video tahlilida xatolik yuz berdi. Qaytadan urinib ko'ring.",
                     parse_mode=ParseMode.HTML
                 )
         
         except asyncio.TimeoutError:
             logger.error("Video processing timeout")
-            await analyzing_msg.edit_text(
-                "⏰ Video tahlili juda uzoq davom etdi. Iltimos, qisqaroq video yuboring.",
+            await safe_edit_message(
+                analyzing_msg,
+                "⏰ Video tahlili juda uzoq davom etdi. Iltimos, kichikroq video yuboring.",
                 parse_mode=ParseMode.HTML
             )
         except Exception as processing_error:
@@ -686,19 +800,19 @@ async def process_video_background(video, chat_id: str, analyzing_msg, update: U
             error_msg = "❌ Video tahlilida xatolik:"
             if "quota" in str(processing_error).lower():
                 error_msg += "\n📊 API chekloviga yetdik. Biroz kuting va qaytadan urinib ko'ring."
-            elif "format" in str(processing_error).lower() or "codec" in str(processing_error).lower():
-                error_msg += "\n🎬 Video formati qo'llab-quvvatlanmaydi. MP4, WebM yoki MOV formatida yuboring."
+            elif "format" in str(processing_error).lower():
+                error_msg += "\n🎬 Video formati qo'llab-quvvatlanmaydi."
             elif "size" in str(processing_error).lower():
-                error_msg += "\n📏 Video juda katta. 50MB dan kichik video yuboring."
+                error_msg += "\n📏 Video juda katta. 20MB dan kichik video yuboring."
             else:
                 error_msg += "\n🔄 Qaytadan urinib ko'ring yoki boshqa video yuboring."
             
-            await analyzing_msg.edit_text(error_msg, parse_mode=ParseMode.HTML)
+            await safe_edit_message(analyzing_msg, error_msg, parse_mode=ParseMode.HTML)
         
         finally:
             # Always clean up temp file
             try:
-                if os.path.exists(tmp_path):
+                if tmp_path is not None and os.path.exists(tmp_path):
                     os.unlink(tmp_path)
             except Exception as cleanup_error:
                 logger.warning(f"Failed to cleanup temp file: {cleanup_error}")
@@ -706,8 +820,394 @@ async def process_video_background(video, chat_id: str, analyzing_msg, update: U
     except Exception as e:
         logger.error(f"Video handler error: {e}")
         try:
-            await analyzing_msg.edit_text(
+            await safe_edit_message(
+                analyzing_msg,
                 "❌ Video yuklashda xatolik yuz berdi. Iltimos qaytadan urinib ko'ring.",
+                parse_mode=ParseMode.HTML
+            )
+        except:
+            pass
+
+# ─── 🎤 Consolidated Audio/Voice Analysis ─────────────────────────────────────
+async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle audio/voice message uploads and analysis with simplified processing."""
+    if not update or not update.message:
+        return
+        
+    # Handle both audio files and voice messages
+    audio = update.message.audio if update.message.audio else None
+    voice = update.message.voice if update.message.voice else None
+    
+    # Must have either audio or voice
+    if not audio and not voice:
+        return
+        
+    await send_typing(update)
+    media = audio or voice
+    chat_id = str(update.effective_chat.id) if update and update.effective_chat else "unknown"
+    
+    # Check file size (limit to 20MB)
+    file_size = getattr(media, 'file_size', 0)
+    if file_size and file_size > 20 * 1024 * 1024:
+        await update.message.reply_text(
+            "❌ <b>Audio juda katta!</b>\n\n"
+            "🔍 <i>Bot faqat 20MB gacha bo'lgan audio xabarlarni tahlil qila oladi.</i>\n\n"
+            "💡 <i>Kichikroq audio xabar yuboring.</i>",
+            parse_mode=ParseMode.HTML
+        )
+        track_user_activity(chat_id, "voice_audio", update)
+        return
+    
+    # For voice messages, we don't show an "analyzing" message to keep the conversation flow natural
+    analyzing_msg = None
+    if audio:
+        # For audio files, show analyzing message
+        analyzing_msg = await update.message.reply_text(
+            "🎤 <b>Audio xabari qabul qilindi!</b>\n\n"
+            "⏳ <i>Audio xabari tahlil qilinmoqda... Biroz kuting!</i>",
+            parse_mode=ParseMode.HTML
+        )
+    
+    # Process audio/voice in background
+    asyncio.create_task(process_audio_voice_background(
+        media, chat_id, analyzing_msg, update, context
+    ))
+    
+    # Track activity
+    track_user_activity(chat_id, "voice_audio", update)
+
+async def process_audio_voice_background(media, chat_id: str, analyzing_msg, update: Update, context):
+    """Process audio/voice messages in background with improved error handling"""
+    tmp_path = None
+    try:
+        # Download audio/voice file
+        file = await context.bot.get_file(media.file_id)
+        
+        # Create temporary file with better error handling
+        tmp_path = None
+        try:
+            # Determine file extension based on media type
+            suffix = ".mp3" if hasattr(media, 'audio') else ".oga"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+                tmp_path = tmp_file.name
+        except Exception as e:
+            logger.error(f"Failed to create temporary file: {e}")
+            raise
+        
+        try:
+            # Download file with timeout
+            await asyncio.wait_for(
+                file.download_to_drive(custom_path=tmp_path),
+                timeout=60
+            )
+            
+            # Wait a moment for file to be fully written
+            await asyncio.sleep(0.5)
+            
+            # Check if file exists and has content
+            if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) == 0:
+                raise Exception("Audio file download failed or is empty")
+            
+            # Process with Gemini in separate thread
+            def process_with_gemini():
+                try:
+                    # Upload to Gemini
+                    uploaded = genai.upload_file(tmp_path)
+                    
+                    # Wait for processing with proper state checking
+                    timeout = 30  # 30 second timeout
+                    interval = 2   # Check every 2 seconds
+                    elapsed = 0
+                    
+                    # Wait for file to be in ACTIVE state
+                    while uploaded.state.name != "ACTIVE" and elapsed < timeout:
+                        if uploaded.state.name == "FAILED":
+                            raise Exception(f"File processing failed: {uploaded.state}")
+                        time.sleep(interval)
+                        elapsed += interval
+                        # Refresh file state
+                        uploaded = genai.get_file(uploaded.name)
+                    
+                    if uploaded.state.name != "ACTIVE":
+                        raise Exception(f"File processing timed out. Final state: {uploaded.state.name}")
+                    
+                    # Generate response with user context
+                    content_context = get_content_context(chat_id)
+                    instruction = (
+                        "The user sent an audio message. Listen to it and respond in a friendly, "
+                        "conversational manner with emojis and nice formatting. Don't repeat what the user said. Answer in Uzbek if the user "
+                        "speaks Uzbek. Otherwise use appropriate language. " + content_context
+                    )
+                    
+                    response = model.generate_content([
+                        {"role": "user", "parts": [instruction]},
+                        {"role": "user", "parts": [uploaded]}
+                    ])
+                    
+                    return response.text.strip() if response and response.text else "🎤 Audio xabarni tahlil qila olmadim."
+                except Exception as e:
+                    logger.error(f"Gemini processing error: {e}")
+                    # Handle SSL errors specifically
+                    if "ssl" in str(e).lower() and "wrong_version_number" in str(e).lower():
+                        logger.warning("SSL version error detected in Gemini processing")
+                    return None
+
+            # Run processing with timeout
+            try:
+                reply = await asyncio.wait_for(
+                    asyncio.to_thread(process_with_gemini),
+                    timeout=45
+                )
+            except asyncio.TimeoutError:
+                reply = None
+            
+            if reply:
+                # Store audio content in memory for future reference
+                file_name = getattr(media, 'file_name', f"audio_{media.file_id[:8]}{suffix}")
+                store_content_memory(chat_id, "audio", reply, file_name)
+                
+                user_history.setdefault(chat_id, []).append({"role": "user", "content": f"[uploaded audio: {file_name}]" if hasattr(media, 'file_name') else "[sent voice message 🎤]"})
+                user_history[chat_id].append({"role": "model", "content": reply})
+                
+                # Send response directly if no analyzing message was shown (for voice messages)
+                if analyzing_msg is None:
+                    await send_long_message(update, reply)
+                else:
+                    # Update the analyzing message with results (for audio files)
+                    await safe_edit_message(
+                        analyzing_msg,
+                        f"🎤 <b>Audio xabar tahlil natijasi:</b>\n\n{reply}",
+                        parse_mode=ParseMode.HTML
+                    )
+            else:
+                if analyzing_msg is not None:
+                    await safe_edit_message(
+                        analyzing_msg,
+                        "❌ <b>Audio xabar tahlilida xatolik yuz berdi</b>\n\n"
+                        "💡 <i>Iltimos, boshqa audio xabar yuboring.</i>",
+                        parse_mode=ParseMode.HTML
+                    )
+                elif analyzing_msg is None:
+                    # For voice messages, send error as a new message
+                    await safe_reply(update, "❌ <b>Audio xabar tahlilida xatolik yuz berdi</b>\n\n"
+                        "💡 <i>Iltimos, boshqa audio xabar yuboring.</i>",
+                        parse_mode=ParseMode.HTML)
+        
+        except asyncio.TimeoutError:
+            logger.error("Audio processing timeout")
+            error_msg = "⏰ <b>Audio xabar tahlili vaqti tugadi</b>\n\n" \
+                       "💡 <i>Iltimos, qisqaroq audio xabar yuboring.</i>"
+            if analyzing_msg is not None:
+                await safe_edit_message(analyzing_msg, error_msg, parse_mode=ParseMode.HTML)
+            else:
+                await safe_reply(update, error_msg, parse_mode=ParseMode.HTML)
+        except Exception as processing_error:
+            logger.error(f"Audio processing error: {processing_error}")
+            # Provide specific error messages
+            error_msg = "❌ <b>Audio xabar tahlilida xatolik:</b>\n\n"
+            error_str = str(processing_error).lower()
+            if "quota" in error_str:
+                error_msg += "📊 API chekloviga yetdik. Biroz kuting va qaytadan urinib ko'ring.\n"
+            elif "format" in error_str:
+                error_msg += "🎤 Audio formati qo'llab-quvvatlanmaydi.\n"
+            elif "size" in error_str:
+                error_msg += "📏 Audio juda katta. 20MB dan kichik audio xabari yuboring.\n"
+            elif "ssl" in error_str and "wrong_version_number" in error_str:
+                error_msg += "🔒 Tarmoq xavfsizlik xatosi. Qaytadan urinib ko'ring.\n"
+            else:
+                error_msg += "🔄 Qaytadan urinib ko'ring yoki boshqa audio xabari yuboring.\n"
+            error_msg += "\n💡 <i>Iltimos, boshqa audio xabar yuboring.</i>"
+            
+            if analyzing_msg is not None:
+                await safe_edit_message(analyzing_msg, error_msg, parse_mode=ParseMode.HTML)
+            else:
+                await safe_reply(update, error_msg, parse_mode=ParseMode.HTML)
+        
+        finally:
+            # Always clean up temp file with better error handling for Windows
+            if tmp_path is not None and os.path.exists(tmp_path):
+                for attempt in range(3):  # Retry up to 3 times
+                    try:
+                        os.unlink(tmp_path)
+                        break
+                    except PermissionError as e:
+                        logger.warning(f"Permission error on cleanup attempt {attempt + 1}: {e}")
+                        if attempt < 2:  # Don't sleep on the last attempt
+                            await asyncio.sleep(1)
+                    except Exception as e:
+                        logger.error(f"Unexpected error during cleanup: {e}")
+                        break
+            
+    except Exception as e:
+        logger.error(f"Audio handler error: {e}")
+        error_msg = "❌ <b>Audio xabar yuklashda xatolik!</b>\n\n" \
+                   "💡 <i>Iltimos, qayta urinib ko'ring.</i>"
+        if analyzing_msg is not None:
+            try:
+                await safe_edit_message(analyzing_msg, error_msg, parse_mode=ParseMode.HTML)
+            except:
+                pass
+        else:
+            try:
+                await safe_reply(update, error_msg, parse_mode=ParseMode.HTML)
+            except:
+                pass
+
+# ─── 📸 Simplified Photo Analysis ─────────────────────────────────────
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle photo uploads and analysis with simplified processing."""
+    if not update or not update.message or not update.message.photo:
+        return
+        
+    await send_typing(update)
+    photo = update.message.photo[-1]  # Get the largest photo
+    chat_id = str(update.effective_chat.id) if update and update.effective_chat else "unknown"
+    
+    # Immediate response to user
+    analyzing_msg = await update.message.reply_text(
+        "📷 <b>Rasm qabul qilindi!</b>\n\n"
+        "⏳ <i>Rasm tahlil qilinmoqda... Biroz kuting!</i>",
+        parse_mode=ParseMode.HTML
+    )
+    
+    # Process photo in background
+    asyncio.create_task(process_photo_background(
+        photo, chat_id, analyzing_msg, update, context
+    ))
+    
+    # Track activity
+    track_user_activity(chat_id, "photos", update)
+
+async def process_photo_background(photo, chat_id: str, analyzing_msg, update: Update, context):
+    """Process photo in background with simplified approach"""
+    tmp_path = None
+    try:
+        # Download photo file
+        file = await context.bot.get_file(photo.file_id)
+        
+        # Create temporary file with better error handling
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
+                tmp_path = tmp_file.name
+        except Exception as e:
+            logger.error(f"Failed to create temporary file: {e}")
+            raise
+        
+        try:
+            # Download file with timeout
+            await asyncio.wait_for(
+                file.download_to_drive(custom_path=tmp_path),
+                timeout=60
+            )
+            
+            # Wait a moment for file to be fully written
+            await asyncio.sleep(0.5)
+            
+            # Check if file exists and has content
+            if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) == 0:
+                raise Exception("Photo file download failed or is empty")
+            
+            # Process with Gemini
+            def process_with_gemini():
+                try:
+                    # Upload to Gemini
+                    uploaded = genai.upload_file(tmp_path)
+                    
+                    # Wait for processing
+                    time.sleep(3)
+                    
+                    # Generate response with user context
+                    content_context = get_content_context(chat_id)
+                    instruction = (
+                        "The user sent a photo. Analyze in detail and react like a friend who saw it and gives a warm, "
+                        "friendly and useful reply. No robotic descriptions. Use emojis and formatting awesomely. "
+                        "Answer in Uzbek if the user speaks Uzbek. Otherwise use appropriate language. " + content_context
+                    )
+                    
+                    response = model.generate_content([
+                        {"role": "user", "parts": [instruction]},
+                        {"role": "user", "parts": [uploaded]}
+                    ])
+                    
+                    return response.text.strip() if response and response.text else "📷 Rasmdan tahlil qila olmadim."
+                except Exception as e:
+                    logger.error(f"Gemini processing error: {e}")
+                    # Handle SSL errors specifically
+                    if "ssl" in str(e).lower() and "wrong_version_number" in str(e).lower():
+                        logger.warning("SSL version error detected in Gemini processing")
+                    return None
+            
+            # Run processing with timeout
+            try:
+                reply = await asyncio.wait_for(
+                    asyncio.to_thread(process_with_gemini),
+                    timeout=45
+                )
+            except asyncio.TimeoutError:
+                reply = None
+            
+            if reply:
+                # Store photo content in memory for future reference
+                store_content_memory(chat_id, "photo", reply, f"photo_{photo.file_id[:8]}.jpg")
+                
+                user_history.setdefault(chat_id, []).append({"role": "user", "content": "[sent photo 📸]"})
+                user_history[chat_id].append({"role": "model", "content": reply})
+                
+                # Update the analyzing message with results
+                await safe_edit_message(
+                    analyzing_msg,
+                    f"📷 <b>Rasm tahlil natijasi:</b>\n\n{reply}",
+                    parse_mode=ParseMode.HTML
+                )
+            else:
+                await safe_edit_message(
+                    analyzing_msg,
+                    "❌ <b>Rasm tahlilida xatolik yuz berdi</b>\n\n"
+                    "💡 <i>Iltimos, boshqa rasm yuboring.</i>",
+                    parse_mode=ParseMode.HTML
+                )
+        
+        except asyncio.TimeoutError:
+            logger.error("Photo processing timeout")
+            await safe_edit_message(
+                analyzing_msg,
+                "⏰ <b>Rasm tahlili vaqti tugadi</b>\n\n"
+                "💡 <i>Iltimos, sifati yaxshiroq rasm yuboring.</i>",
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as processing_error:
+            logger.error(f"Photo processing error: {processing_error}")
+            await safe_edit_message(
+                analyzing_msg,
+                "❌ <b>Rasm tahlilida xatolik:</b>\n\n"
+                "💡 <i>Iltimos, boshqa rasm yuboring.</i>",
+                parse_mode=ParseMode.HTML
+            )
+        
+        finally:
+            # Always clean up temp file with better error handling for Windows
+            if tmp_path is not None and os.path.exists(tmp_path):
+                for attempt in range(3):  # Retry up to 3 times
+                    try:
+                        os.unlink(tmp_path)
+                        break
+                    except PermissionError as e:
+                        logger.warning(f"Permission error on cleanup attempt {attempt + 1}: {e}")
+                        if attempt < 2:  # Don't sleep on the last attempt
+                            await asyncio.sleep(1)
+                    except Exception as e:
+                        logger.error(f"Unexpected error during cleanup: {e}")
+                        break
+            
+    except Exception as e:
+        logger.error(f"Photo handler error: {e}")
+        try:
+            await safe_edit_message(
+                analyzing_msg,
+                "❌ <b>Rasm yuklashda xatolik!</b>\n\n"
+                "💡 <i>Iltimos, qayta urinib ko'ring.</i>",
                 parse_mode=ParseMode.HTML
             )
         except:
@@ -943,6 +1443,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_users = len(user_history)
     success_count = 0
     failed_count = 0
+    blocked_count = 0
     
     status_msg = await safe_reply(update, f"📡 <b>Broadcast boshlandi...</b>\n\n📊 Jami foydalanuvchilar: {total_users}")
     
@@ -951,6 +1452,11 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     for i, chat_id in enumerate(user_history.keys()):
+        # Skip blocked users
+        if chat_id in blocked_users:
+            blocked_count += 1
+            continue
+            
         try:
             # Create a fake update object for sending
             await context.bot.send_message(
@@ -960,33 +1466,44 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             success_count += 1
         except Exception as e:
-            logger.warning(f"Failed to send broadcast to {chat_id}: {e}")
-            failed_count += 1
+            # Check if user blocked the bot
+            if "Forbidden" in str(e) and "bot was blocked by the user" in str(e):
+                blocked_users.add(chat_id)
+                blocked_count += 1
+                logger.info(f"User {chat_id} has blocked the bot")
+            else:
+                logger.warning(f"Failed to send broadcast to {chat_id}: {e}")
+                failed_count += 1
         
         # Update status every 10 users
-        if (i + 1) % 10 == 0 and status_msg:
-            try:
-                await safe_edit_message(
-                    status_msg,
-                    f"📡 <b>Broadcast jarayoni...</b>\n\n"
-                    f"✅ Yuborildi: {success_count}\n"
-                    f"❌ Xatolik: {failed_count}\n"
-                    f"📊 Jarayon: {i + 1}/{total_users}"
-                )
-            except Exception:
-                pass
+        if (i + 1) % 10 == 0:
+            edit_success = await safe_edit_message(
+                status_msg,
+                f"📡 <b>Broadcast jarayoni...</b>\n\n"
+                f"✅ Yuborildi: {success_count}\n"
+                f"❌ Xatolik: {failed_count}\n"
+                f"🚫 Blocklangan: {blocked_count}\n"
+                f"📊 Jarayon: {i + 1}/{total_users}"
+            )
+            # If editing failed, the message might be invalid, so we stop trying to edit it
+            if not edit_success:
+                status_msg = None
     
     # Final status
     final_text = (
         f"📡 <b>Broadcast yakunlandi!</b>\n\n"
         f"✅ Muvaffaqiyatli: <b>{success_count}</b>\n"
         f"❌ Xatolik: <b>{failed_count}</b>\n"
+        f"🚫 Blocklangan: <b>{blocked_count}</b>\n"
         f"📊 Jami: <b>{total_users}</b>\n\n"
         f"<i>🔒 Admin broadcast yakunlandi</i>"
     )
     
     if status_msg:
-        await safe_edit_message(status_msg, final_text)
+        edit_success = await safe_edit_message(status_msg, final_text)
+        # If editing failed, send as a new message instead
+        if not edit_success:
+            await safe_reply(update, final_text)
     else:
         await safe_reply(update, final_text)
 
@@ -1048,6 +1565,7 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Send update message
     successful_sends = 0
     failed_sends = 0
+    blocked_sends = 0
     
     status_msg = await safe_reply(update, f"📤 {len(all_chat_ids)} ta foydalanuvchiga yangilanish haqida xabar yuborilmoqda...")
     
@@ -1056,6 +1574,11 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     for chat_id in all_chat_ids:
+        # Skip blocked users
+        if chat_id in blocked_users:
+            blocked_sends += 1
+            continue
+            
         try:
             await context.bot.send_message(
                 chat_id=int(chat_id),
@@ -1065,19 +1588,29 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             successful_sends += 1
             await asyncio.sleep(0.15)  # Delay to avoid rate limits
         except Exception as e:
-            failed_sends += 1
-            logger.warning(f"Failed to send update to {chat_id}: {e}")
+            # Check if user blocked the bot
+            if "Forbidden" in str(e) and "bot was blocked by the user" in str(e):
+                blocked_users.add(chat_id)
+                blocked_sends += 1
+                logger.info(f"User {chat_id} has blocked the bot")
+            else:
+                failed_sends += 1
+                logger.warning(f"Failed to send update to {chat_id}: {e}")
     
     # Send results to admin
     result_text = (
         f"✅ <b>Yangilanish xabari yuborildi!</b>\n\n"
         f"📤 Yuborildi: <b>{successful_sends}</b>\n"
         f"❌ Yuborilmadi: <b>{failed_sends}</b>\n"
+        f"🚫 Blocklangan: <b>{blocked_sends}</b>\n"
         f"👥 Jami foydalanuvchilar: <b>{len(all_chat_ids)}</b>"
     )
     
     if status_msg:
-        await safe_edit_message(status_msg, result_text)
+        edit_success = await safe_edit_message(status_msg, result_text)
+        # If editing failed, send as a new message instead
+        if not edit_success:
+            await safe_reply(update, result_text)
     else:
         await safe_reply(update, result_text)
 
@@ -1276,6 +1809,8 @@ async def system_monitor_command(update: Update, context: ContextTypes.DEFAULT_T
 
 # ─── 📌 Handlers ───────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.effective_chat:
+        return
     chat_id = str(update.effective_chat.id)
     user_history[chat_id] = []
     
@@ -1290,13 +1825,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "is_bot": user.is_bot if hasattr(user, 'is_bot') else False
         }
     
-    await update.message.reply_text(
-        WELCOME,
-        parse_mode=ParseMode.HTML,
-        reply_markup=main_menu_keyboard()
-    )
+    if update.message:
+        await update.message.reply_text(
+            WELCOME,
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_menu_keyboard()
+        )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+    
     help_text = (
         "<b>🤖 AQLJON YORDAM MENU</b>\n\n"
         "🟢 <b>/start</b> — Botni qayta ishga tushirish\n"
@@ -1314,17 +1853,18 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Check if user is admin and add admin commands to help
     admin_ids = [ADMIN_ID.strip()] if ADMIN_ID and ADMIN_ID.strip() else []
-    user_id = str(update.effective_user.id)
-    
-    if user_id in admin_ids:
-        help_text += (
-            "\n\n<b>🔧 Admin Buyruqlari:</b>\n"
-            "🟢 <b>/broadcast [xabar]</b> — Barcha foydalanuvchilarga xabar yuborish\n"
-            "🟢 <b>/reply [chat_id] [xabar]</b> — Foydalanuvchi murojaatiga javob berish\n"
-            "🟢 <b>/update</b> — Barcha foydalanuvchilarga yangilanish haqida xabar\n"
-            "🟢 <b>/adminstats</b> — To'liq bot statistikasini ko'rish\n"
-            "🟢 <b>/monitor</b> — Tizim salomatligi va unumdorlik monitoringi"
-        )
+    if update.effective_user:
+        user_id = str(update.effective_user.id)
+        
+        if user_id in admin_ids:
+            help_text += (
+                "\n\n<b>🔧 Admin Buyruqlari:</b>\n"
+                "🟢 <b>/broadcast [xabar]</b> — Barcha foydalanuvchilarga xabar yuborish\n"
+                "🟢 <b>/reply [chat_id] [xabar]</b> — Foydalanuvchi murojaatiga javob berish\n"
+                "🟢 <b>/update</b> — Barcha foydalanuvchilarga yangilanish haqida xabar\n"
+                "🟢 <b>/adminstats</b> — To'liq bot statistikasini ko'rish\n"
+                "🟢 <b>/monitor</b> — Tizim salomatligi va unumdorlik monitoringi"
+            )
     
     await update.message.reply_text(help_text, parse_mode=ParseMode.HTML, reply_markup=main_menu_keyboard())
 
@@ -1531,117 +2071,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Unexpected error in handle_text: {e}")
 
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        if not update or not update.message or not update.message.photo:
-            return
-        await send_typing(update)
-        file = await context.bot.get_file(update.message.photo[-1].file_id)
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
-            await file.download_to_drive(custom_path=tmp_file.name)
-            tmp_path = tmp_file.name
-
-        try:
-            uploaded = await asyncio.wait_for(
-                asyncio.to_thread(lambda: genai.upload_file(tmp_path)),
-                timeout=30  # Increased timeout
-            )
-            response = await asyncio.wait_for(
-                asyncio.to_thread(lambda: model.generate_content([
-                    {"role": "user", "parts": [
-                        "The user sent a photo. Analyze in detail and react like a friend who saw it and gives a warm, friendly and useful reply. No robotic descriptions. Use emojis and formatting awesomely. And always answer awesomely in uzbek language. if user asks in another language then answer in that language."
-                    ]},
-                    {"role": "user", "parts": [uploaded]}
-                ])),
-                timeout=30  # Increased timeout
-            )
-            reply = response.text.strip() if response and response.text else ""
-            chat_id = str(update.effective_chat.id) if update and update.effective_chat else "unknown"
-            
-            # Track photo activity
-            track_user_activity(chat_id, "photos", update)
-            
-            # Store photo analysis in memory for future reference
-            store_content_memory(chat_id, "photo", reply)
-            
-            user_history.setdefault(chat_id, []).append({"role": "user", "content": "[sent photo 📸]"})
-            user_history[chat_id].append({"role": "model", "content": reply})
-            await send_long_message(update, reply)
-        except asyncio.TimeoutError:
-            logger.error("Photo processing timeout")
-            await safe_reply(update, "⏰ Rasm tahlili juda uzoq davom etdi. Qaytadan urinib ko'ring.")
-        except Exception as e:
-            logger.error(f"Photo processing error: {e}")
-            await safe_reply(update, "❌ Rasmni tahlil qilishda xatolik yuz berdi. Qaytadan urinib ko'ring.")
-        finally:
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                pass
-    except (NetworkError, TelegramError, TimedOut) as e:
-        logger.error(f"Telegram API error in handle_photo: {e}")
-        await asyncio.sleep(2)  # Wait before retry
-    except Exception as e:
-        logger.error(f"Unexpected error in handle_photo: {e}")
-
-async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        if not update or not update.message or not (update.message.voice or update.message.audio):
-            return
-        await send_typing(update)
-        voice = update.message.voice or update.message.audio
-        if not voice or not voice.file_id:
-            return
-        file = await context.bot.get_file(voice.file_id)
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".oga") as tmp_file:
-            await file.download_to_drive(custom_path=tmp_file.name)
-            tmp_path = tmp_file.name
-
-        try:
-            uploaded = await asyncio.wait_for(
-                asyncio.to_thread(lambda: genai.upload_file(tmp_path)),
-                timeout=30
-            )
-            response = await asyncio.wait_for(
-                asyncio.to_thread(lambda: model.generate_content([
-                    {"role": "user", "parts": [
-                        "The user sent an audio message. Listen to it and respond awesomely like a friend who listened to their voice message. Don't repeat what the user said! Be warm, friendly and engaging. Use emojis and nice formatting. Answer in Uzbek if the user speaks Uzbek, otherwise use appropriate language."
-                    ]},
-                    {"role": "user", "parts": [uploaded]}
-                ])),
-                timeout=30
-            )
-            reply = response.text.strip() if response and response.text else ""
-            chat_id = str(update.effective_chat.id) if update and update.effective_chat else "unknown"
-            
-            # Track voice activity
-            track_user_activity(chat_id, "voice_audio", update)
-            
-            # Store audio analysis in memory for future reference
-            store_content_memory(chat_id, "audio", reply)
-            
-            user_history.setdefault(chat_id, []).append({"role": "user", "content": "[sent voice message 🎤]"})
-            user_history[chat_id].append({"role": "model", "content": reply})
-            await send_long_message(update, reply)
-        except asyncio.TimeoutError:
-            logger.error("Voice processing timeout")
-            await safe_reply(update, "⏰ Audio tahlili juda uzoq davom etdi. Qaytadan urinib ko'ring.")
-        except Exception as e:
-            logger.error(f"Voice processing error: {e}")
-            await safe_reply(update, "❌ Audio xabarni qayta ishlashda xatolik. Qaytadan urinib ko'ring.")
-        finally:
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                pass
-    except (NetworkError, TelegramError, TimedOut) as e:
-        logger.error(f"Telegram API error in handle_voice: {e}")
-        await asyncio.sleep(2)
-    except Exception as e:
-        logger.error(f"Unexpected error in handle_voice: {e}")
-
 # ─── 🚀 Start Bot ──────────────────────────────────────────────
 def main():
     # Check if required environment variables are set
@@ -1672,9 +2101,10 @@ def main():
     app.add_handler(CommandHandler("search", handle_text))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_audio))  # Consolidated audio/voice handler
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.VIDEO, handle_video))  # Video handler
+    app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))  # Bot blocking detection
     
     logger.info("🤖 AQLJON SmartBot is now LIVE and listening!") 
     logger.info("🎬 Video processing: Non-blocking with timeouts enabled")

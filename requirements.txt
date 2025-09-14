@@ -1,5 +1,5 @@
 # Core AI and Bot Framework
-google-generativeai==0.8.3
+google-generativeai==0.8.5  # Updated to latest version
 python-telegram-bot[job-queue]==22.1
 python-dotenv==1.0.0
 
