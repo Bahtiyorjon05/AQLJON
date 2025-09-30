@@ -735,7 +735,7 @@ class CommandHandlers:
                 continue
             
             # Create task for sending message
-            task = asyncio.create_task(self.send_broadcast_message(context, chat_id, update_message))
+            task = asyncio.create_task(self.send_update_message(context, chat_id, update_message))
             tasks.append((chat_id, task))
         
         # Process tasks in batches to avoid rate limiting
