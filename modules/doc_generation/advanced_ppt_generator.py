@@ -467,7 +467,7 @@ class AdvancedPPTGenerator(BaseDocumentGenerator):
             try:
                 topic_category = await asyncio.wait_for(
                     asyncio.to_thread(self._detect_topic_category, topic),
-                    timeout=15.0  # Increased timeout to 15 seconds
+                    timeout=60.0  # Increased timeout to 30 seconds
                 )
             except asyncio.TimeoutError:
                 logger.warning("Topic detection timed out, using default category")
@@ -478,26 +478,33 @@ class AdvancedPPTGenerator(BaseDocumentGenerator):
             
             structure = self.topic_structures.get(topic_category, self.topic_structures['default'])
             
-            # Generate content with Gemini with increased timeout and retry logic
+            # Generate content with Gemini with increased timeout and better retry logic
             content = None
-            for attempt in range(2):  # Try up to 2 times
+            # Try up to 3 times with increasingly longer timeouts
+            timeouts = [90.0, 120.0, 180.0]  # 1.5min, 2min, 3min
+            for attempt in range(3):
                 try:
                     content = await asyncio.wait_for(
                         self._generate_presentation_content(topic, structure, content_context),
-                        timeout=Config.PROCESSING_TIMEOUT * 2  # Use configured timeout
+                        timeout=timeouts[attempt]  # Increasing timeout for each attempt
                     )
-                    break  # Success, exit retry loop
+                    if content is not None:
+                        logger.info(f"Content generation successful on attempt {attempt + 1}")
+                        break  # Success, exit retry loop
                 except asyncio.TimeoutError:
-                    logger.warning(f"Content generation timed out on attempt {attempt + 1}")
-                    if attempt == 1:  # Last attempt
+                    logger.warning(f"Content generation timed out on attempt {attempt + 1} with {timeouts[attempt]}s timeout")
+                    if attempt == 2:  # Last attempt
+                        logger.error("All content generation attempts timed out, using fallback content")
                         content = self._create_fallback_content(topic, structure)
                 except Exception as e:
                     logger.error(f"Content generation failed on attempt {attempt + 1}: {e}")
-                    if attempt == 1:  # Last attempt
+                    if attempt == 2:  # Last attempt
+                        logger.error("All content generation attempts failed, using fallback content")
                         content = self._create_fallback_content(topic, structure)
             
             # Ensure content is not None
             if content is None:
+                logger.warning("Content is None, using fallback content")
                 content = self._create_fallback_content(topic, structure)
             
             # Create presentation in a separate thread to avoid blocking with timeout
@@ -512,7 +519,7 @@ class AdvancedPPTGenerator(BaseDocumentGenerator):
                         self._create_enhanced_presentation, 
                         topic, content, structure, temp_file.name  # content is guaranteed to be a dict now
                     ),
-                    timeout=Config.PROCESSING_TIMEOUT  # Use configured timeout
+                    timeout=180.0  # Increased timeout to 3 minutes for presentation creation
                 )
             except asyncio.TimeoutError:
                 logger.error("Presentation creation timed out")
@@ -627,8 +634,23 @@ class AdvancedPPTGenerator(BaseDocumentGenerator):
             try:
                 response = await asyncio.wait_for(
                     asyncio.to_thread(lambda: self.model.generate_content(prompt)),
-                    timeout=45.0  # Increased timeout to 45 seconds
+                    timeout=90.0  # Increased timeout to 90 seconds for complex content
                 )
+                if response and response.text:
+                    # Extract JSON from response
+                    import re
+                    
+                    # Try to extract JSON from code blocks
+                    json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+                    if json_match:
+                        json_str = json_match.group(0)
+                        try:
+                            content = json.loads(json_str)
+                            # Validate that we have the required structure
+                            if isinstance(content, dict) and 'title_slide' in content and 'agenda' in content:
+                                return content
+                        except json.JSONDecodeError:
+                            pass
             except asyncio.TimeoutError:
                 logger.warning("Content generation timed out, retrying with simpler prompt")
                 # Try with a simpler prompt if the first attempt times out
@@ -646,30 +668,36 @@ class AdvancedPPTGenerator(BaseDocumentGenerator):
                 Keep it professional and engaging.
                 """
                 
-                response = await asyncio.wait_for(
-                    asyncio.to_thread(lambda: self.model.generate_content(simple_prompt)),
-                    timeout=Config.PROCESSING_TIMEOUT  # Use configured timeout
-                )
-            
-            if not response or not response.text:
-                raise Exception("Empty response from Gemini")
-            
-            # Extract JSON from response
-            import re
-            
-            # Try to extract JSON from code blocks
-            json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(0)
+                # Use a longer timeout for the retry since it's simpler
                 try:
-                    content = json.loads(json_str)
-                    # Validate that we have the required structure
-                    if isinstance(content, dict) and 'title_slide' in content and 'agenda' in content:
-                        return content
-                except json.JSONDecodeError:
-                    pass
+                    response = await asyncio.wait_for(
+                        asyncio.to_thread(lambda: self.model.generate_content(simple_prompt)),
+                        timeout=120.0  # Increased timeout to 120 seconds for the retry
+                    )
+                    if response and response.text:
+                        # Extract JSON from response
+                        import re
+                        
+                        # Try to extract JSON from code blocks
+                        json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+                        if json_match:
+                            json_str = json_match.group(0)
+                            try:
+                                content = json.loads(json_str)
+                                # Validate that we have the required structure
+                                if isinstance(content, dict) and 'title_slide' in content and 'agenda' in content:
+                                    return content
+                            except json.JSONDecodeError:
+                                pass
+                except asyncio.TimeoutError:
+                    logger.error("Content generation timed out on retry attempt")
+                except Exception as e:
+                    logger.error(f"Content generation failed on retry attempt: {e}")
+            except Exception as e:
+                logger.error(f"Content generation failed on first attempt: {e}")
             
-            # If JSON extraction fails, create fallback content
+            # If we get here, both attempts failed, so create fallback content
+            logger.warning("Both content generation attempts failed, using fallback content")
             return self._create_fallback_content(topic, structure)
             
         except Exception as e:
