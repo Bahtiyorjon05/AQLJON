@@ -230,10 +230,17 @@ class CommandHandlers:
                 return
         
         # Calculate comprehensive statistics
-        total_users = len(self.memory.user_history)
+        # Include all users who have started the bot, not just those who sent messages
+        all_users = set()
+        all_users.update(self.memory.user_history.keys())
+        all_users.update(self.memory.user_info.keys())
+        all_users.update(self.memory.user_stats.keys())
+        all_users.update(self.memory.user_content_memory.keys())
+        total_users = len(all_users)
+        
         total_messages = sum(len(history) for history in self.memory.user_history.values())
         total_user_messages = sum(len([m for m in history if m["role"] == "user"]) for history in self.memory.user_history.values())
-        avg_messages = total_user_messages / total_users if total_users > 0 else 0
+        avg_messages = total_user_messages / len(self.memory.user_history) if len(self.memory.user_history) > 0 else 0
         
         # Media statistics
         total_photos = sum(stats.get("photos", 0) for stats in self.memory.user_stats.values())
@@ -283,44 +290,48 @@ class CommandHandlers:
                 "blocking_time": blocking_time
             })
         
-        # Top users by message count (25 users, excluding blocked users)
+        # Top users by message count (30 users, excluding blocked users)
         user_message_counts = []
-        for chat_id, history in self.memory.user_history.items():
+        # Include all users who have started the bot
+        for chat_id in all_users:
             # Skip blocked users
             if self.memory.is_blocked(chat_id):
                 continue
                 
-            user_messages = len([m for m in history if m["role"] == "user"])
-            if user_messages > 0:
-                user_data = self.memory.user_info.get(chat_id, {})
-                username = user_data.get("username", "Unknown")
-                first_name = user_data.get("first_name", "Unknown")
-                last_name = user_data.get("last_name", "")
-                full_name = f"{first_name} {last_name}".strip() or "Unknown"
-                user_id_info = user_data.get("user_id", "Unknown")
-                
-                # Get user's current location if available
-                location_info = "Not shared"
-                try:
-                    # Try to get location handler and check if user has location data
-                    from modules.location_features.location_handler import get_location_handler
-                    location_handler = get_location_handler()
-                    if chat_id in location_handler.location_data:
-                        location_data = location_handler.location_data[chat_id]
-                        city = location_data.get("city", "Unknown city")
-                        location_info = f"{city} ({location_data['latitude']:.4f}, {location_data['longitude']:.4f})"
-                except Exception:
-                    # If we can't access location handler, just show "Not shared"
-                    pass
-                
-                user_message_counts.append({
-                    "chat_id": chat_id,
-                    "user_id": user_id_info,
-                    "username": username,
-                    "full_name": full_name,
-                    "messages": user_messages,
-                    "location": location_info
-                })
+            # Get user messages count (0 if user hasn't sent any messages)
+            user_messages = 0
+            if chat_id in self.memory.user_history:
+                user_messages = len([m for m in self.memory.user_history[chat_id] if m["role"] == "user"])
+            
+            user_data = self.memory.user_info.get(chat_id, {})
+            username = user_data.get("username", "Unknown")
+            first_name = user_data.get("first_name", "Unknown")
+            last_name = user_data.get("last_name", "")
+            full_name = f"{first_name} {last_name}".strip() or "Unknown"
+            user_id_info = user_data.get("user_id", "Unknown")
+            
+            # Get user's current location if available
+            location_info = "Not shared"
+            try:
+                # Try to get location handler and check if user has location data
+                from modules.location_features.location_handler import get_location_handler
+                location_handler = get_location_handler()
+                if chat_id in location_handler.location_data:
+                    location_data = location_handler.location_data[chat_id]
+                    city = location_data.get("city", "Unknown city")
+                    location_info = f"{city} ({location_data['latitude']:.4f}, {location_data['longitude']:.4f})"
+            except Exception:
+                # If we can't access location handler, just show "Not shared"
+                pass
+            
+            user_message_counts.append({
+                "chat_id": chat_id,
+                "user_id": user_id_info,
+                "username": username,
+                "full_name": full_name,
+                "messages": user_messages,
+                "location": location_info
+            })
         
         user_message_counts.sort(key=lambda x: x["messages"], reverse=True)
         top_30_users = user_message_counts[:30]
@@ -665,7 +676,7 @@ class CommandHandlers:
         
         # Enhanced update message
         update_message = (
-            f"🎉🎉🎉 <b>🚨 AQLJON KEYINGI BOSQICHGA O'TDI ! 🌟</b> 🚀\n\n"
+            f"🎉🎉🎉 <b>AQLJON KEYINGI BOSQICHGA O'TDI ! 🌟</b> 🚀\n\n"
             f"✨ <b>ENG SO'NGGI YANGILIKLAR BILAN TANISHING:</b>\n\n"
             
             f"📄 <b><i>HUJJAT TAYYORLASH TIZIMI</i></b> 🎉\n"
