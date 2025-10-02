@@ -543,8 +543,23 @@ class CommandHandlers:
         # Extract the text after the command - this will contain HTML formatting tags if used
         broadcast_text = message_text.split(" ", 1)[1] if message_text else ""
         
-        # Send broadcast to all users with concurrency for better performance
-        total_users = len(self.memory.user_history)
+        # Send broadcast to all users who have started the bot, not just those who sent messages
+        # Get all users who have ever interacted with the bot
+        all_chat_ids = set()
+        
+        # From user_history (anyone who sent messages)
+        all_chat_ids.update(self.memory.user_history.keys())
+        
+        # From user_info (anyone who started the bot)
+        all_chat_ids.update(self.memory.user_info.keys())
+        
+        # From user_stats (anyone tracked)
+        all_chat_ids.update(self.memory.user_stats.keys())
+        
+        # From user_content_memory (anyone who sent media)
+        all_chat_ids.update(self.memory.user_content_memory.keys())
+        
+        total_users = len(all_chat_ids)
         success_count = 0
         failed_count = 0
         blocked_count = 0
@@ -557,7 +572,7 @@ class CommandHandlers:
         
         # Create tasks for concurrent message sending
         tasks = []
-        chat_ids = list(self.memory.user_history.keys())
+        chat_ids = list(all_chat_ids)
         
         for chat_id in chat_ids:
             # Skip blocked users
