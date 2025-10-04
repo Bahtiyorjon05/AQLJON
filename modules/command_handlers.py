@@ -213,11 +213,15 @@ class CommandHandlers:
         
         # Get page number from context or default to 1
         page = 1
-        if context.user_data and 'admin_stats_page' in context.user_data:
-            page = context.user_data['admin_stats_page']
+        blocked_page = 1
+        if context.user_data:
+            if 'admin_stats_page' in context.user_data:
+                page = context.user_data['admin_stats_page']
+            if 'admin_stats_blocked_page' in context.user_data:
+                blocked_page = context.user_data['admin_stats_blocked_page']
         
         # Check cache first for better performance
-        cache_key = f"admin_stats_{page}"
+        cache_key = f"admin_stats_{page}_{blocked_page}"
         current_time = time.time()
         if cache_key in self._admin_stats_cache and cache_key in self._admin_stats_cache_time:
             # Cache is valid for 30 seconds
@@ -289,6 +293,11 @@ class CommandHandlers:
                 "full_name": full_name,
                 "blocking_time": blocking_time
             })
+        
+        # Pagination for blocked users (10 users per page)
+        blocked_users_per_page = 10
+        total_blocked_pages = (len(blocked_users_details) + blocked_users_per_page - 1) // blocked_users_per_page
+        current_blocked_page_users = blocked_users_details[(blocked_page-1)*blocked_users_per_page:blocked_page*blocked_users_per_page]
         
         # Top users by message count (30 users, excluding blocked users)
         user_message_counts = []
@@ -371,10 +380,10 @@ class CommandHandlers:
             f"🗓️ Cleanup After: <b>{Config.MAX_INACTIVE_DAYS}</b> days\n\n"
         )
         
-        # Add blocked users details with blocking time
+        # Add blocked users details with pagination
         if blocked_users_details:
-            admin_stats_text += "🚫 <b>Blocked Users Details:</b>\n"
-            for i, user in enumerate(blocked_users_details, 1):
+            admin_stats_text += f"🚫 <b>Blocked Users Details (Page {blocked_page}/{total_blocked_pages}):</b>\n"
+            for i, user in enumerate(current_blocked_page_users, (blocked_page-1)*blocked_users_per_page + 1):
                 username_display = f"@{user['username']}" if user['username'] != "No username" else "No username"
                 admin_stats_text += (
                     f"{i}. <b>{user['full_name']}</b> ({username_display})\n"
@@ -395,22 +404,41 @@ class CommandHandlers:
                 )
             
             # Add pagination controls if needed
-            if total_pages > 1:
+            if total_pages > 1 or total_blocked_pages > 1:
                 keyboard = []
-                nav_row = []
                 
-                # Previous button
-                if page > 1:
-                    nav_row.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"admin_stats_page_{page-1}"))
+                # Blocked users pagination
+                if total_blocked_pages > 1:
+                    blocked_nav_row = []
+                    # Previous button for blocked users
+                    if blocked_page > 1:
+                        blocked_nav_row.append(InlineKeyboardButton("⬅️ Blocked Prev", callback_data=f"admin_stats_blocked_page_{blocked_page-1}"))
+                    
+                    # Page info for blocked users
+                    blocked_nav_row.append(InlineKeyboardButton(f"Blocked {blocked_page}/{total_blocked_pages}", callback_data="admin_stats_blocked_info"))
+                    
+                    # Next button for blocked users
+                    if blocked_page < total_blocked_pages:
+                        blocked_nav_row.append(InlineKeyboardButton("Blocked Next ➡️", callback_data=f"admin_stats_blocked_page_{blocked_page+1}"))
+                    
+                    keyboard.append(blocked_nav_row)
                 
-                # Page info
-                nav_row.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="admin_stats_info"))
+                # Regular users pagination
+                if total_pages > 1:
+                    nav_row = []
+                    # Previous button for regular users
+                    if page > 1:
+                        nav_row.append(InlineKeyboardButton("⬅️ Users Prev", callback_data=f"admin_stats_page_{page-1}"))
+                    
+                    # Page info for regular users
+                    nav_row.append(InlineKeyboardButton(f"Users {page}/{total_pages}", callback_data="admin_stats_info"))
+                    
+                    # Next button for regular users
+                    if page < total_pages:
+                        nav_row.append(InlineKeyboardButton("Users Next ➡️", callback_data=f"admin_stats_page_{page+1}"))
+                    
+                    keyboard.append(nav_row)
                 
-                # Next button
-                if page < total_pages:
-                    nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"admin_stats_page_{page+1}"))
-                
-                keyboard.append(nav_row)
                 reply_markup = InlineKeyboardMarkup(keyboard)
             else:
                 reply_markup = None
@@ -454,9 +482,24 @@ class CommandHandlers:
                 await query.answer()
             except (ValueError, IndexError):
                 await query.answer("❌ Invalid page", show_alert=True)
+        elif query.data and query.data.startswith("admin_stats_blocked_page_"):
+            try:
+                blocked_page = int(query.data.split("_")[-1])
+                # Store blocked page in context
+                if context.user_data is None:
+                    context.user_data = {}
+                context.user_data['admin_stats_blocked_page'] = blocked_page
+                
+                # Re-call admin stats with new blocked page
+                await self.admin_stats_command(update, context)
+                await query.answer()
+            except (ValueError, IndexError):
+                await query.answer("❌ Invalid page", show_alert=True)
         elif query.data and query.data == "admin_stats_info":
             await query.answer("Page navigation", show_alert=False)
-
+        elif query.data and query.data == "admin_stats_blocked_info":
+            await query.answer("Blocked users page navigation", show_alert=False)
+    
     async def system_monitor_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Monitor system health and performance (admin only)"""
         if not update or not update.message or not update.effective_chat or not update.effective_user:

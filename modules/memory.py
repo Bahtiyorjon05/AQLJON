@@ -1,4 +1,6 @@
 import time
+import json
+import os
 from datetime import datetime, timedelta
 
 # ─── 🧠 Enhanced Memory Management ─────────────────────────────────────────────────
@@ -19,6 +21,9 @@ class MemoryManager:
         self.MAX_CONTENT_MEMORY = max_content_memory
         self.MAX_USERS_IN_MEMORY = max_users
         self.MAX_INACTIVE_DAYS = max_inactive_days
+        
+        # Load blocked users from file if it exists
+        self.load_blocked_users()
     
     # ─── 📊 User Statistics Tracking ─────────────────────────────────────────────────
     def track_user_activity(self, chat_id: str, activity_type: str, update=None):
@@ -183,9 +188,13 @@ class MemoryManager:
         current_time = time.time()
         inactive_threshold = current_time - (self.MAX_INACTIVE_DAYS * 24 * 60 * 60)
         
-        # Find inactive users
+        # Find inactive users (excluding blocked users)
         inactive_users = []
         for chat_id, stats in self.user_stats.items():
+            # Skip blocked users - they should never be cleaned up
+            if chat_id in self.blocked_users:
+                continue
+                
             # Convert "now" to actual timestamp for comparison
             if stats.get("last_active") == "now":
                 stats["last_active"] = current_time
@@ -213,6 +222,9 @@ class MemoryManager:
         if removed_count > 0:
             print(f"Cleaned up {removed_count} inactive users")
         
+        # Save blocked users to persist across restarts
+        self.save_blocked_users()
+        
         return removed_count
     
     def check_memory_limits(self):
@@ -223,11 +235,15 @@ class MemoryManager:
             print(f"User limit exceeded: {total_users}/{self.MAX_USERS_IN_MEMORY}")
             cleanup_count = self.cleanup_inactive_users()
             
-            # If still over limit, remove oldest users
+            # If still over limit, remove oldest users (excluding blocked users)
             if len(self.user_history) > self.MAX_USERS_IN_MEMORY:
                 # Sort by last activity and remove oldest
                 user_activity = []
                 for chat_id, stats in self.user_stats.items():
+                    # Skip blocked users
+                    if chat_id in self.blocked_users:
+                        continue
+                        
                     last_active = stats.get("last_active", 0)
                     if isinstance(last_active, str):
                         last_active = 0
@@ -249,6 +265,9 @@ class MemoryManager:
                         del self.user_info[chat_id]
                 
                 print(f"Removed {to_remove} oldest users to maintain memory limits")
+        
+        # Save blocked users to persist across restarts
+        self.save_blocked_users()
     
     # ─── 🧠 Conversation History Management ─────────────────────────────────────────────────
     def add_to_history(self, chat_id: str, role: str, content: str):
@@ -271,12 +290,42 @@ class MemoryManager:
     def block_user(self, chat_id: str):
         """Mark user as blocked"""
         self.blocked_users.add(chat_id)
+        # Save blocked users to persist across restarts
+        self.save_blocked_users()
     
     def unblock_user(self, chat_id: str):
         """Unmark user as blocked"""
         if chat_id in self.blocked_users:
             self.blocked_users.remove(chat_id)
+            # Save blocked users to persist across restarts
+            self.save_blocked_users()
     
     def is_blocked(self, chat_id: str) -> bool:
         """Check if user is blocked"""
         return chat_id in self.blocked_users
+    
+    # ─── 💾 Blocked Users Persistence ─────────────────────────────────────────────────
+    def save_blocked_users(self):
+        """Save blocked users to a file for persistence across restarts"""
+        try:
+            blocked_data = {
+                "blocked_users": list(self.blocked_users),
+                "timestamp": time.time()
+            }
+            with open("blocked_users.json", "w") as f:
+                json.dump(blocked_data, f)
+        except Exception as e:
+            print(f"Failed to save blocked users: {e}")
+    
+    def load_blocked_users(self):
+        """Load blocked users from a file"""
+        try:
+            if os.path.exists("blocked_users.json"):
+                with open("blocked_users.json", "r") as f:
+                    blocked_data = json.load(f)
+                    self.blocked_users = set(blocked_data.get("blocked_users", []))
+                    print(f"Loaded {len(self.blocked_users)} blocked users from file")
+        except Exception as e:
+            print(f"Failed to load blocked users: {e}")
+            # Initialize with empty set if loading fails
+            self.blocked_users = set()
