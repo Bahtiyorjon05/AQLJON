@@ -51,6 +51,18 @@ class MemoryManager:
         self.user_stats[chat_id][activity_type] += 1
         self.user_stats[chat_id]["last_active"] = time.time()
         
+        # Ensure user is also in user_info if update is provided
+        if update and update.effective_user and chat_id not in self.user_info:
+            user = update.effective_user
+            self.user_info[chat_id] = {
+                "user_id": user.id,
+                "username": user.username if user.username else None,
+                "first_name": user.first_name if user.first_name else None,
+                "last_name": user.last_name if user.last_name else None,
+                "is_bot": user.is_bot if hasattr(user, 'is_bot') else False,
+                "last_seen": time.time()
+            }
+        
         # Track daily activity for analytics
         today = datetime.now().strftime("%Y-%m-%d")
         if chat_id not in self.user_daily_activity:

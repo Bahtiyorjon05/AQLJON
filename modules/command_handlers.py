@@ -223,12 +223,12 @@ class CommandHandlers:
             if 'admin_stats_blocked_page' in context.user_data:
                 blocked_page = context.user_data['admin_stats_blocked_page']
         
-        # Check cache first for better performance
+        # Check cache first for better performance - reduced cache time for more responsive updates
         cache_key = f"admin_stats_{page}_{blocked_page}"
         current_time = time.time()
         if cache_key in self._admin_stats_cache and cache_key in self._admin_stats_cache_time:
-            # Cache is valid for 30 seconds
-            if current_time - self._admin_stats_cache_time[cache_key] < 30:
+            # Cache is valid for 1 second only (reduced from 2 for even more responsive updates)
+            if current_time - self._admin_stats_cache_time[cache_key] < 1:
                 cached_result = self._admin_stats_cache[cache_key]
                 if cached_result[1]:  # Has reply markup
                     await update.message.reply_text(cached_result[0], parse_mode=ParseMode.HTML, reply_markup=cached_result[1])
@@ -450,7 +450,7 @@ class CommandHandlers:
         
         admin_stats_text += "<i>🔒 Admin-only information | Updated in real-time</i>"
         
-        # Cache the result for better performance
+        # Cache the result for better performance (reduced cache time)
         self._admin_stats_cache[cache_key] = (admin_stats_text, reply_markup)
         self._admin_stats_cache_time[cache_key] = current_time
         
@@ -987,7 +987,8 @@ class CommandHandlers:
                 
                 # Send to all admin IDs if there are multiple with concurrency for better performance
                 admin_ids = [Config.ADMIN_ID.strip()] if Config.ADMIN_ID and Config.ADMIN_ID.strip() else []
-                tasks = []
+                # Fixed: Properly send messages to all admin IDs
+                send_tasks = []
                 for admin_id in admin_ids:
                     try:
                         # Create task for sending message
@@ -996,9 +997,16 @@ class CommandHandlers:
                             text=admin_notification,
                             parse_mode=ParseMode.HTML
                         ))
-                        tasks.append(task)
+                        send_tasks.append(task)
                     except Exception as e:
                         logger.error(f"Failed to create task for sending contact message to admin {admin_id}: {e}")
+                
+                # Wait for all messages to be sent
+                if send_tasks:
+                    try:
+                        await asyncio.gather(*send_tasks, return_exceptions=True)
+                    except Exception as e:
+                        logger.error(f"Error while gathering contact message tasks: {e}")
                 
                 # Send immediate confirmation to user
                 await safe_reply(update, "✅ Xabaringiz adminga yuborildi! Tez orada siz bilan bog'lanadilar.")
