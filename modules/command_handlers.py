@@ -45,7 +45,7 @@ class CommandHandlers:
         chat_id = str(update.effective_chat.id)
         self.memory.clear_history(chat_id)
         
-        # Track user info when they start
+        # Track user info and activity when they start
         if update.effective_user:
             user = update.effective_user
             self.memory.user_info[chat_id] = {
@@ -55,7 +55,10 @@ class CommandHandlers:
                 "last_name": user.last_name if user.last_name else None,
                 "is_bot": user.is_bot if hasattr(user, 'is_bot') else False
             }
-        
+            
+            # Track user activity to ensure they appear in admin stats
+            self.memory.track_user_activity(chat_id, "messages", update)
+    
         if update.message:
             # Use fast reply for better performance
             from modules.utils import send_fast_reply

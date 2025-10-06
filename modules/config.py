@@ -19,7 +19,7 @@ class Config:
     MAX_HISTORY = 100
     MAX_CONTENT_MEMORY = 150
     MAX_USERS_IN_MEMORY = 2000
-    MAX_INACTIVE_DAYS = 15  # Changed from 10 to 15 days
+    MAX_INACTIVE_DAYS = 15  # Back to 15 days for proper cleanup
     
     # File Processing
     MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB limit
