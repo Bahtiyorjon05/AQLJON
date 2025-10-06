@@ -22,8 +22,7 @@ class MemoryManager:
         self.MAX_USERS_IN_MEMORY = max_users
         self.MAX_INACTIVE_DAYS = max_inactive_days
         
-        # Load blocked users from file if it exists
-        self.load_blocked_users()
+        # No file persistence for Heroku deployment
     
     # ─── 📊 User Statistics Tracking ─────────────────────────────────────────────────
     def track_user_activity(self, chat_id: str, activity_type: str, update=None):
@@ -222,9 +221,6 @@ class MemoryManager:
         if removed_count > 0:
             print(f"Cleaned up {removed_count} inactive users")
         
-        # Save blocked users to persist across restarts
-        self.save_blocked_users()
-        
         return removed_count
     
     def check_memory_limits(self):
@@ -266,9 +262,6 @@ class MemoryManager:
                 
                 print(f"Removed {to_remove} oldest users to maintain memory limits")
         
-        # Save blocked users to persist across restarts
-        self.save_blocked_users()
-    
     # ─── 🧠 Conversation History Management ─────────────────────────────────────────────────
     def add_to_history(self, chat_id: str, role: str, content: str):
         """Add message to user conversation history"""
@@ -286,46 +279,18 @@ class MemoryManager:
         if chat_id in self.user_history:
             self.user_history[chat_id] = []
     
-    # ─── 🚫 Blocking Management ─────────────────────────────────────────────────
+    # ─── 🚫 Blocking Management (No Persistence for Heroku) ─────────────────────────
     def block_user(self, chat_id: str):
         """Mark user as blocked"""
         self.blocked_users.add(chat_id)
-        # Save blocked users to persist across restarts
-        self.save_blocked_users()
+        # No file persistence for Heroku deployment
     
     def unblock_user(self, chat_id: str):
         """Unmark user as blocked"""
         if chat_id in self.blocked_users:
             self.blocked_users.remove(chat_id)
-            # Save blocked users to persist across restarts
-            self.save_blocked_users()
+        # No file persistence for Heroku deployment
     
     def is_blocked(self, chat_id: str) -> bool:
         """Check if user is blocked"""
         return chat_id in self.blocked_users
-    
-    # ─── 💾 Blocked Users Persistence ─────────────────────────────────────────────────
-    def save_blocked_users(self):
-        """Save blocked users to a file for persistence across restarts"""
-        try:
-            blocked_data = {
-                "blocked_users": list(self.blocked_users),
-                "timestamp": time.time()
-            }
-            with open("blocked_users.json", "w") as f:
-                json.dump(blocked_data, f)
-        except Exception as e:
-            print(f"Failed to save blocked users: {e}")
-    
-    def load_blocked_users(self):
-        """Load blocked users from a file"""
-        try:
-            if os.path.exists("blocked_users.json"):
-                with open("blocked_users.json", "r") as f:
-                    blocked_data = json.load(f)
-                    self.blocked_users = set(blocked_data.get("blocked_users", []))
-                    print(f"Loaded {len(self.blocked_users)} blocked users from file")
-        except Exception as e:
-            print(f"Failed to load blocked users: {e}")
-            # Initialize with empty set if loading fails
-            self.blocked_users = set()

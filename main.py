@@ -93,6 +93,36 @@ async def on_my_chat_member(update, context):
             # User unblocked/started -> mark active in DB
             memory_manager.unblock_user(chat_id)
             logger.info(f"User {chat_id} has unblocked the bot")
+            
+            # Track user activity to ensure they appear in admin stats
+            # Create a mock update object for tracking
+            class MockUser:
+                def __init__(self, user_id):
+                    self.id = user_id
+                    self.username = None
+                    self.first_name = None
+                    self.last_name = None
+                    self.is_bot = False
+            
+            class MockChat:
+                def __init__(self, chat_id):
+                    self.id = int(chat_id)
+            
+            class MockEffectiveUser:
+                def __init__(self, chat_id):
+                    self.id = int(chat_id)
+                    self.username = None
+                    self.first_name = None
+                    self.last_name = None
+                    self.is_bot = False
+            
+            class MockUpdate:
+                def __init__(self, chat_id):
+                    self.effective_user = MockEffectiveUser(chat_id)
+                    self.effective_chat = MockChat(chat_id)
+            
+            mock_update = MockUpdate(chat_id)
+            memory_manager.track_user_activity(chat_id, "messages", mock_update)
 
 # ─── 🔄 Enhanced Concurrent Handler Wrappers ─────────────────────────────────────────────────
 # These wrappers ensure that all handlers run in the background without blocking other users
