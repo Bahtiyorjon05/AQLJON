@@ -1,8 +1,9 @@
 # AQLJON - Intelligent Muslim Assistant Bot
 
-[![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.11-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 [![Telegram](https://img.shields.io/badge/Telegram-Bot-blue)](https://core.telegram.org/bots)
+[![Heroku](https://img.shields.io/badge/Deploy-Heroku-purple)](https://heroku.com)
 
 AQLJON is an advanced, multilingual Telegram bot powered by Google Gemini AI that serves as an intelligent Muslim assistant. It can process various media types, generate professional documents, provide location-based services, and maintain contextual conversations with users.
 
@@ -106,34 +107,102 @@ The bot follows a modular design pattern with separate handlers for different fu
 ## 🚀 Getting Started
 
 ### Prerequisites
-- Python 3.8 or higher
-- Telegram Bot Token
-- Google Gemini API Key
-- Serper API Key (optional, for web search)
+- Python 3.11 (required for python-telegram-bot compatibility)
+- Telegram Bot Token (get from [@BotFather](https://t.me/BotFather))
+- Google Gemini API Key (get from [Google AI Studio](https://makersuite.google.com/app/apikey))
+- Serper API Key (optional, for web search - get from [Serper.dev](https://serper.dev))
 
-### Installation
+### Quick Start (Local Development)
 
 1. **Clone the repository:**
 ```bash
-git clone https://github.com/yourusername/AQLJON.git
+git clone https://github.com/Bahtiyorjon05/AQLJON.git
 cd AQLJON
 ```
 
-2. **Install dependencies:**
+2. **Create Python 3.11 virtual environment:**
+```bash
+# Windows
+py -3.11 -m venv .venv311
+.venv311\Scripts\activate.bat
+
+# Linux/Mac
+python3.11 -m venv .venv311
+source .venv311/bin/activate
+```
+
+3. **Install dependencies:**
 ```bash
 pip install -r requirements.txt
 ```
 
-3. **Configure environment variables:**
+4. **Configure environment variables:**
 ```bash
+# Copy the example file
 cp .env.example .env
-# Edit .env with your API keys
+
+# Edit .env with your API keys:
+# - TELEGRAM_BOT_TOKEN (required)
+# - GEMINI_API_KEY (required)
+# - ADMIN_ID (optional - your Telegram user ID)
+# - SERPER_API_KEY (optional - for web search)
 ```
 
-4. **Run the bot:**
+5. **Run the bot:**
 ```bash
 python main.py
 ```
+
+### 🚀 Deploy to Heroku (Recommended for Production)
+
+#### One-Click Deploy
+[![Deploy](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy)
+
+#### Manual Heroku Deployment
+
+1. **Prerequisites:**
+   - [Heroku CLI](https://devcenter.heroku.com/articles/heroku-cli) installed
+   - Heroku account created
+
+2. **Login to Heroku:**
+```bash
+heroku login
+```
+
+3. **Create a new Heroku app:**
+```bash
+heroku create your-aqljon-bot
+```
+
+4. **Set environment variables:**
+```bash
+heroku config:set TELEGRAM_BOT_TOKEN="your_telegram_bot_token"
+heroku config:set GEMINI_API_KEY="your_gemini_api_key"
+heroku config:set ADMIN_ID="your_telegram_user_id"
+heroku config:set SERPER_API_KEY="your_serper_api_key"  # Optional
+```
+
+5. **Deploy to Heroku:**
+```bash
+git push heroku main
+```
+
+6. **Start the bot:**
+```bash
+heroku ps:scale worker=1
+```
+
+7. **Check logs:**
+```bash
+heroku logs --tail
+```
+
+#### Heroku Configuration Notes
+- ✅ Python 3.11.0 is specified in `runtime.txt`
+- ✅ `Procfile` configured with worker dyno
+- ✅ All dependencies in `requirements.txt`
+- ✅ In-memory storage (no database required)
+- ✅ Automatic cleanup of inactive users
 
 ### Environment Variables
 ```env

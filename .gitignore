@@ -130,13 +130,12 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.venv311
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
-
-echo .env >> .gitignore
 # Spyder project settings
 .spyderproject
 .spyproject
@@ -176,3 +175,40 @@ cython_debug/
 
 # Ignore data directories
 .data/
+
+# Heroku specific
+*.log
+.DS_Store
+
+# IDE specific
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Review/fix documentation (not needed in production)
+*FIXES*.md
+*REVIEW*.md
+*FIX_HISTORY*.md
+*DEPLOYMENT*.md
+*SETUP*.md
+*QUICKSTART*.md
+*PRODUCTION*.md
+*VERSION_FIX*.md
+
+# Setup batch files (local development only)
+create_venv311.bat
+fix_dependencies.bat
+run_bot_311.bat
+run_bot.bat
+
+# Temporary files
+temp/
+tmp/
+*.tmp
+
+# Python cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

@@ -1,0 +1,44 @@
+{
+  "name": "AQLJON SmartBot",
+  "description": "Advanced Telegram bot powered by Google Gemini AI - Intelligent Muslim Assistant with document generation, media processing, and location services",
+  "repository": "https://github.com/Bahtiyorjon05/AQLJON",
+  "logo": "https://telegram.org/img/t_logo.png",
+  "keywords": [
+    "telegram",
+    "bot",
+    "gemini-ai",
+    "python",
+    "document-generation",
+    "prayer-times",
+    "location-services"
+  ],
+  "buildpacks": [
+    {
+      "url": "heroku/python"
+    }
+  ],
+  "formation": {
+    "worker": {
+      "quantity": 1,
+      "size": "eco"
+    }
+  },
+  "env": {
+    "TELEGRAM_BOT_TOKEN": {
+      "description": "Your Telegram Bot Token from @BotFather",
+      "required": true
+    },
+    "GEMINI_API_KEY": {
+      "description": "Your Google Gemini API Key from https://makersuite.google.com/app/apikey",
+      "required": true
+    },
+    "ADMIN_ID": {
+      "description": "Your Telegram User ID (optional, for admin features)",
+      "required": false
+    },
+    "SERPER_API_KEY": {
+      "description": "Your Serper API Key from https://serper.dev (optional, for web search)",
+      "required": false
+    }
+  }
+}

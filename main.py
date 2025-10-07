@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+import pytz
 import google.generativeai as genai
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ChatMemberHandler
 from telegram.error import NetworkError
@@ -291,6 +292,7 @@ def main():
                .connect_timeout(Config.NETWORK_TIMEOUT)
                .pool_timeout(Config.NETWORK_TIMEOUT)
                .concurrent_updates(True)  # Enable concurrent updates for better performance
+               .job_queue(None)  # Disable job queue to avoid pytz timezone issues
                .build())
     except Exception as e:
         logger.error(f"Failed to build application: {e}")

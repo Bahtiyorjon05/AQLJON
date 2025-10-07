@@ -226,6 +226,15 @@ class CommandHandlers:
         # Check cache first for better performance - reduced cache time for more responsive updates
         cache_key = f"admin_stats_{page}_{blocked_page}"
         current_time = time.time()
+        
+        # Clear old cache entries (older than 5 seconds)
+        old_cache_keys = [k for k, v in self._admin_stats_cache_time.items() if current_time - v > 5]
+        for k in old_cache_keys:
+            if k in self._admin_stats_cache:
+                del self._admin_stats_cache[k]
+            if k in self._admin_stats_cache_time:
+                del self._admin_stats_cache_time[k]
+        
         if cache_key in self._admin_stats_cache and cache_key in self._admin_stats_cache_time:
             # Cache is valid for 1 second only (reduced from 2 for even more responsive updates)
             if current_time - self._admin_stats_cache_time[cache_key] < 1:
@@ -299,7 +308,11 @@ class CommandHandlers:
         
         # Pagination for blocked users (10 users per page)
         blocked_users_per_page = 10
-        total_blocked_pages = (len(blocked_users_details) + blocked_users_per_page - 1) // blocked_users_per_page
+        total_blocked_pages = max(1, (len(blocked_users_details) + blocked_users_per_page - 1) // blocked_users_per_page)
+        
+        # Validate and clamp blocked_page to valid range
+        blocked_page = max(1, min(blocked_page, total_blocked_pages))
+        
         current_blocked_page_users = blocked_users_details[(blocked_page-1)*blocked_users_per_page:blocked_page*blocked_users_per_page]
         
         # Top users by message count (30 users, excluding blocked users)
@@ -350,7 +363,11 @@ class CommandHandlers:
         
         # Pagination for top users (10 users per page for better UX)
         users_per_page = 10
-        total_pages = (len(top_30_users) + users_per_page - 1) // users_per_page
+        total_pages = max(1, (len(top_30_users) + users_per_page - 1) // users_per_page)
+        
+        # Validate and clamp page to valid range
+        page = max(1, min(page, total_pages))
+        
         current_page_users = top_30_users[(page-1)*users_per_page:page*users_per_page]
         
         admin_stats_text = (
@@ -587,7 +604,12 @@ class CommandHandlers:
             return
         
         # Extract the text after the command - this will contain HTML formatting tags if used
-        broadcast_text = message_text.split(" ", 1)[1] if message_text else ""
+        parts = message_text.split(" ", 1)
+        broadcast_text = parts[1] if len(parts) > 1 else ""
+        
+        if not broadcast_text.strip():
+            await safe_reply(update, f"❓ Iltimos broadcast xabarini kiriting.\n\n<code>/broadcast [xabar matni]</code>")
+            return
         
         # Send broadcast to all users who have started the bot, not just those who sent messages
         # Get all users who have ever interacted with the bot
