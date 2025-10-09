@@ -1,9 +1,15 @@
 import time
 from datetime import datetime, timedelta
+import pickle
+import os
+import logging
+
+logger = logging.getLogger(__name__)
+MEMORY_FILE = "memory.pkl"
 
 # ─── 🧠 Enhanced Memory Management ─────────────────────────────────────────────────
 class MemoryManager:
-    """Manages user memory, history, and statistics"""
+    """Manages user memory, history, and statistics with persistence."""
     
     def __init__(self, max_history=100, max_content_memory=100, max_users=2000, max_inactive_days=10):
         self.user_history = {}
@@ -19,6 +25,8 @@ class MemoryManager:
         self.MAX_CONTENT_MEMORY = max_content_memory
         self.MAX_USERS_IN_MEMORY = max_users
         self.MAX_INACTIVE_DAYS = max_inactive_days
+
+        self.load_from_disk()
     
     # ─── 📊 User Statistics Tracking ─────────────────────────────────────────────────
     def track_user_activity(self, chat_id: str, activity_type: str, update=None):
@@ -280,3 +288,39 @@ class MemoryManager:
     def is_blocked(self, chat_id: str) -> bool:
         """Check if user is blocked"""
         return chat_id in self.blocked_users
+
+    # ─── 💾 Persistence ─────────────────────────────────────────────────
+    def save_to_disk(self):
+        """Save memory state to a file."""
+        try:
+            with open(MEMORY_FILE, "wb") as f:
+                state = {
+                    "user_history": self.user_history,
+                    "user_content_memory": self.user_content_memory,
+                    "user_stats": self.user_stats,
+                    "user_info": self.user_info,
+                    "user_contact_messages": self.user_contact_messages,
+                    "user_daily_activity": self.user_daily_activity,
+                    "blocked_users": self.blocked_users,
+                }
+                pickle.dump(state, f)
+                logger.info("Memory state saved to disk.")
+        except Exception as e:
+            logger.error(f"Failed to save memory state: {e}")
+
+    def load_from_disk(self):
+        """Load memory state from a file."""
+        if os.path.exists(MEMORY_FILE):
+            try:
+                with open(MEMORY_FILE, "rb") as f:
+                    state = pickle.load(f)
+                    self.user_history = state.get("user_history", {})
+                    self.user_content_memory = state.get("user_content_memory", {})
+                    self.user_stats = state.get("user_stats", {})
+                    self.user_info = state.get("user_info", {})
+                    self.user_contact_messages = state.get("user_contact_messages", {})
+                    self.user_daily_activity = state.get("user_daily_activity", {})
+                    self.blocked_users = state.get("blocked_users", set())
+                    logger.info("Memory state loaded from disk.")
+            except Exception as e:
+                logger.error(f"Failed to load memory state: {e}")

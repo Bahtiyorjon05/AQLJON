@@ -623,6 +623,8 @@ class CommandHandlers:
 
         else:
             await safe_reply(update, final_text)
+
+        self.memory.save_to_disk()
     
     async def send_broadcast_message(self, context, chat_id, broadcast_text):
         """Helper method to send broadcast message to a single user"""
@@ -811,6 +813,8 @@ class CommandHandlers:
                 await safe_reply(update, result_text)
         else:
             await safe_reply(update, result_text)
+
+        self.memory.save_to_disk()
     
     async def reply_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Admin can reply to specific users"""
