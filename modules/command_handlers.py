@@ -872,6 +872,8 @@ class CommandHandlers:
             except Exception as e2:
                 logger.error(f"Failed to send reply to user {target_chat_id}: {e2}")
                 await safe_reply(update, f"❌ Javob yuborishda xatolik yuz berdi. Foydalanuvchi {target_chat_id} botni bloklagandir.")
+
+        self.memory.save_to_disk()
         return
 
     async def contact_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
