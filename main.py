@@ -72,6 +72,13 @@ async def search_web(query: str) -> str:
 # ─── 📋 Command Handlers ─────────────────────────────────────────────────
 command_handlers = CommandHandlers(memory_manager, doc_generator, search_web)
 
+# ─── 💾 Periodic Saving ─────────────────────────────────────────────────
+async def periodic_save(memory_manager: MemoryManager, interval: int):
+    """Periodically save the memory state to disk."""
+    while True:
+        await asyncio.sleep(interval)
+        memory_manager.save_to_disk()
+
 # ─── 🚫 Bot Blocking Detection ─────────────────────────────────────────────────
 async def on_my_chat_member(update, context):
     """Handle my_chat_member updates to detect when users block/unblock the bot"""
@@ -89,10 +96,12 @@ async def on_my_chat_member(update, context):
             # User blocked/stopped the bot -> mark inactive in DB
             memory_manager.block_user(chat_id)
             logger.info(f"User {chat_id} has blocked the bot")
+            memory_manager.save_to_disk()  # Save state immediately
         elif new_status == "member" and old_status == "kicked":
             # User unblocked/started -> mark active in DB
             memory_manager.unblock_user(chat_id)
             logger.info(f"User {chat_id} has unblocked the bot")
+            memory_manager.save_to_disk()  # Save state immediately
 
 # ─── 🔄 Enhanced Concurrent Handler Wrappers ─────────────────────────────────────────────────
 # These wrappers ensure that all handlers run in the background without blocking other users
@@ -243,15 +252,15 @@ def handle_task_exception(task, handler_name):
 # ─── 🚀 Main Application Setup ─────────────────────────────────────────────────
 
 
-def main():
-    """Main function to start the AQLJON bot"""
+async def main_async():
+    """Asynchronous main function to run the bot and background tasks."""
     # Validate configuration first
     try:
         Config.validate()
     except ValueError as e:
         logger.error(f"Configuration error: {e}")
         return
-    
+
     # Create application with enhanced error handling and proper configuration
     try:
         app = (Application.builder()
@@ -265,7 +274,7 @@ def main():
     except Exception as e:
         logger.error(f"Failed to build application: {e}")
         return
-    
+
     # Register command handlers with concurrency wrappers
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(CommandHandler("help", help_handler))
@@ -280,7 +289,6 @@ def main():
     app.add_handler(CommandHandler("update", update_handler))
     app.add_handler(CommandHandler("reply", reply_handler))
 
-    
     # Register callback handler for inline buttons
     from telegram.ext import CallbackQueryHandler
     app.add_handler(CallbackQueryHandler(concurrent_callback_handler))
@@ -289,7 +297,6 @@ def main():
     app.add_handler(CallbackQueryHandler(concurrent_admin_stats_callback_handler, pattern="^admin_stats_"))
     
     # Register message handlers with enhanced concurrency
-    # Note: We're using a single text handler that checks for location states internally
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, concurrent_text_handler))
     app.add_handler(MessageHandler(filters.PHOTO, concurrent_photo_handler))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, concurrent_audio_handler))
@@ -299,46 +306,43 @@ def main():
     
     # Register chat member handler for blocking detection
     app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
+
+    # Start the periodic saving task
+    save_interval = 300  # 5 minutes
+    asyncio.create_task(periodic_save(memory_manager, save_interval))
     
-    logger.info("🤖 AQLJON SmartBot is now LIVE and listening!") 
+    logger.info("🤖 AQLJON SmartBot is now LIVE and listening!")
+    logger.info(f"💾 User data will be saved every {save_interval} seconds.")
     logger.info("🎬 Video processing: Non-blocking with timeouts enabled")
     logger.info("🚀 Bot optimized for concurrent users")
     logger.info("🛡️ Enhanced error handling and rate limiting enabled")
     logger.info("🔄 Concurrent updates enabled for maximum performance")
     
-    # Run with enhanced polling settings and better error handling
-    retry_count = 0
-    max_retries = 5
-    
-    while retry_count < max_retries:
-        try:
-            app.run_polling(
-                poll_interval=2.0,  # Increased poll interval to reduce API calls
-                timeout=Config.NETWORK_TIMEOUT,
-                bootstrap_retries=3,  # More retries on startup
-                allowed_updates=None,  # Use default updates
-                drop_pending_updates=False,  # Process all pending updates
-                stop_signals=[]  # Handle stop signals properly
-            )
-            break  # If successful, break out of retry loop
-        except NetworkError as e:
-            retry_count += 1
-            logger.error(f"Network error in main loop (attempt {retry_count}/{max_retries}): {e}")
-            if retry_count < max_retries:
-                logger.info(f"Retrying in 5 seconds...")
-                time.sleep(5)
-            else:
-                logger.error("Max retries reached. Exiting.")
-                break
-        except Exception as e:
-            retry_count += 1
-            logger.error(f"Unexpected error in main loop (attempt {retry_count}/{max_retries}): {e}")
-            if retry_count < max_retries:
-                logger.info(f"Retrying in 10 seconds...")
-                time.sleep(10)
-            else:
-                logger.error("Max retries reached. Exiting.")
-                break
+    try:
+        await app.run_polling(
+            poll_interval=2.0,
+            timeout=Config.NETWORK_TIMEOUT,
+            bootstrap_retries=3,
+            allowed_updates=None,
+            drop_pending_updates=False,
+        )
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        logger.info("Bot shutdown requested. Saving final state...")
+    except Exception as e:
+        logger.error(f"An unexpected error occurred in the main polling loop: {e}")
+    finally:
+        memory_manager.save_to_disk()
+        logger.info("Bot has been shut down gracefully.")
+
+
+def main():
+    """Main function to start the AQLJON bot"""
+    try:
+        asyncio.run(main_async())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user.")
+    except Exception as e:
+        logger.error(f"Critical error in main: {e}")
 
 if __name__ == "__main__":
     main()
