@@ -183,6 +183,7 @@ cython_debug/
 # IDE specific
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 *~
@@ -212,3 +213,14 @@ tmp/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# User data persistence files (JSON)
+# These files store bot user data and should not be committed
+user_stats.json
+user_info.json
+blocked_users.json
+
+# Test and development files
+test_*.py
+*_test.py
+nul

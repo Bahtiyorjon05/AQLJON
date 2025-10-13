@@ -57,6 +57,7 @@ class CommandHandlers:
             }
             
             # Track user activity to ensure they appear in admin stats
+            # This will preserve existing stats if they already exist
             self.memory.track_user_activity(chat_id, "messages", update)
     
         if update.message:
@@ -247,16 +248,13 @@ class CommandHandlers:
         
         # Calculate comprehensive statistics
         # Include all users who have started the bot, not just those who sent messages
-        all_users = set()
-        all_users.update(self.memory.user_history.keys())
-        all_users.update(self.memory.user_info.keys())
-        all_users.update(self.memory.user_stats.keys())
-        all_users.update(self.memory.user_content_memory.keys())
+        all_users = self.memory.get_all_users()
         total_users = len(all_users)
         
-        total_messages = sum(len(history) for history in self.memory.user_history.values())
-        total_user_messages = sum(len([m for m in history if m["role"] == "user"]) for history in self.memory.user_history.values())
-        avg_messages = total_user_messages / len(self.memory.user_history) if len(self.memory.user_history) > 0 else 0
+        # Count messages from user_stats instead of user_history since history gets cleaned up
+        total_messages = sum(stats.get("messages", 0) for stats in self.memory.user_stats.values())
+        total_user_messages = total_messages  # Since we're counting all user messages
+        avg_messages = total_user_messages / len(self.memory.user_stats) if len(self.memory.user_stats) > 0 else 0
         
         # Media statistics
         total_photos = sum(stats.get("photos", 0) for stats in self.memory.user_stats.values())
@@ -271,10 +269,10 @@ class CommandHandlers:
         total_word = sum(stats.get("word_generated", 0) for stats in self.memory.user_stats.values())
         total_ppt = sum(stats.get("ppt_generated", 0) for stats in self.memory.user_stats.values())
         
-        # Activity categorization
-        highly_active = sum(1 for history in self.memory.user_history.values() if len([m for m in history if m["role"] == "user"]) >= 20)
-        moderately_active = sum(1 for history in self.memory.user_history.values() if 5 <= len([m for m in history if m["role"] == "user"]) < 20)
-        low_activity = sum(1 for history in self.memory.user_history.values() if 1 <= len([m for m in history if m["role"] == "user"]) < 5)
+        # Activity categorization - based on actual message counts in user_stats
+        highly_active = sum(1 for stats in self.memory.user_stats.values() if stats.get("messages", 0) >= 20)
+        moderately_active = sum(1 for stats in self.memory.user_stats.values() if 5 <= stats.get("messages", 0) < 20)
+        low_activity = sum(1 for stats in self.memory.user_stats.values() if 1 <= stats.get("messages", 0) < 5)
         
         # Memory system status
         total_content_memories = sum(len(memories) for memories in self.memory.user_content_memory.values())
@@ -323,10 +321,10 @@ class CommandHandlers:
             if self.memory.is_blocked(chat_id):
                 continue
                 
-            # Get user messages count (0 if user hasn't sent any messages)
+            # Get user messages count from user_stats (0 if user hasn't sent any messages)
             user_messages = 0
-            if chat_id in self.memory.user_history:
-                user_messages = len([m for m in self.memory.user_history[chat_id] if m["role"] == "user"])
+            if chat_id in self.memory.user_stats:
+                user_messages = self.memory.user_stats[chat_id].get("messages", 0)
             
             user_data = self.memory.user_info.get(chat_id, {})
             username = user_data.get("username", "Unknown")
@@ -613,19 +611,7 @@ class CommandHandlers:
         
         # Send broadcast to all users who have started the bot, not just those who sent messages
         # Get all users who have ever interacted with the bot
-        all_chat_ids = set()
-        
-        # From user_history (anyone who sent messages)
-        all_chat_ids.update(self.memory.user_history.keys())
-        
-        # From user_info (anyone who started the bot)
-        all_chat_ids.update(self.memory.user_info.keys())
-        
-        # From user_stats (anyone tracked)
-        all_chat_ids.update(self.memory.user_stats.keys())
-        
-        # From user_content_memory (anyone who sent media)
-        all_chat_ids.update(self.memory.user_content_memory.keys())
+        all_chat_ids = self.memory.get_all_users()
         
         total_users = len(all_chat_ids)
         success_count = 0
@@ -703,7 +689,6 @@ class CommandHandlers:
             # If editing failed, send as a new message instead
             if not edit_success:
                 await safe_reply(update, final_text)
-
         else:
             await safe_reply(update, final_text)
     
@@ -789,19 +774,7 @@ class CommandHandlers:
         )
         
         # Get all users who have ever interacted with the bot
-        all_chat_ids = set()
-        
-        # From user_history (anyone who sent messages)
-        all_chat_ids.update(self.memory.user_history.keys())
-        
-        # From user_info (anyone who started the bot)
-        all_chat_ids.update(self.memory.user_info.keys())
-        
-        # From user_stats (anyone tracked)
-        all_chat_ids.update(self.memory.user_stats.keys())
-        
-        # From user_content_memory (anyone who sent media)
-        all_chat_ids.update(self.memory.user_content_memory.keys())
+        all_chat_ids = self.memory.get_all_users()
         
         if not all_chat_ids:
             await safe_reply(update, "❌ Hech qanday foydalanuvchi topilmadi!")
