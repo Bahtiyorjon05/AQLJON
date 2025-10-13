@@ -74,7 +74,7 @@ async def search_web(query: str) -> str:
 command_handlers = CommandHandlers(memory_manager, doc_generator, search_web)
 
 # ─── 💾 Periodic Data Persistence Task ─────────────────────────────────────────────────
-async def periodic_save(app):
+async def periodic_save(application):
     """Periodically save user data to prevent loss on dyno restart"""
     while True:
         try:
@@ -92,7 +92,7 @@ async def periodic_save(app):
             break
 
 # ─── 🧹 Periodic Cleanup Task ─────────────────────────────────────────────────
-async def periodic_cleanup(app):
+async def periodic_cleanup(application):
     """Periodically clean up inactive users to preserve memory"""
     while True:
         try:
@@ -313,6 +313,15 @@ def handle_task_exception(task, handler_name):
 
 # ─── 🚀 Main Application Setup ─────────────────────────────────────────────────
 
+async def post_init(application) -> None:
+    """Post initialization function to start background tasks"""
+    # Start periodic save task (every 5 minutes)
+    application.create_task(periodic_save(application))
+    logger.info("💾 Periodic auto-save task started (every 5 minutes)")
+
+    # Start periodic cleanup task (every 6 hours)
+    application.create_task(periodic_cleanup(application))
+    logger.info("🧹 Periodic cleanup task started (every 6 hours)")
 
 def main():
     """Main function to start the AQLJON bot"""
@@ -333,6 +342,7 @@ def main():
                .pool_timeout(Config.NETWORK_TIMEOUT)
                .concurrent_updates(True)  # Enable concurrent updates for better performance
                .job_queue(None)  # Disable job queue to avoid pytz timezone issues
+               .post_init(post_init)  # Set post_init callback
                .build())
     except Exception as e:
         logger.error(f"Failed to build application: {e}")
@@ -379,14 +389,6 @@ def main():
     logger.info("🔄 Concurrent updates enabled for maximum performance")
     logger.info(f"💾 Loaded {len(memory_manager.user_stats)} users from persistent storage")
 
-    # Start periodic save task (every 5 minutes)
-    save_task = asyncio.create_task(periodic_save(app))
-    logger.info("💾 Periodic auto-save task started (every 5 minutes)")
-
-    # Start periodic cleanup task (every 6 hours)
-    cleanup_task = asyncio.create_task(periodic_cleanup(app))
-    logger.info("🧹 Periodic cleanup task started (every 6 hours)")
-    
     # Run with enhanced polling settings and better error handling
     retry_count = 0
     max_retries = 5
@@ -425,10 +427,6 @@ def main():
     logger.info("💾 Saving data before shutdown...")
     memory_manager.save_persistent_data()
     logger.info("✅ Data saved successfully")
-
-    # Cancel the background tasks when the bot stops
-    save_task.cancel()
-    cleanup_task.cancel()
 
 if __name__ == "__main__":
     main()
