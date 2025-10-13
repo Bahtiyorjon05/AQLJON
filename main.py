@@ -74,44 +74,30 @@ async def search_web(query: str) -> str:
 command_handlers = CommandHandlers(memory_manager, doc_generator, search_web)
 
 # ─── 💾 Periodic Data Persistence Task ─────────────────────────────────────────────────
-async def periodic_save(application):
+async def periodic_save(context):
     """Periodically save user data to prevent loss on dyno restart"""
-    while True:
-        try:
-            # Save data every 5 minutes to prevent data loss
-            await asyncio.sleep(5 * 60)  # 5 minutes
-
-            # Save all persistent data
-            saved = memory_manager.save_persistent_data()
-            if saved:
-                logger.info(f"Auto-saved user data: {len(memory_manager.user_stats)} users, {len(memory_manager.blocked_users)} blocked")
-        except Exception as e:
-            logger.error(f"Error in periodic save: {e}")
-        except asyncio.CancelledError:
-            logger.info("Periodic save task cancelled")
-            break
+    try:
+        # Save all persistent data
+        saved = memory_manager.save_persistent_data()
+        if saved:
+            logger.info(f"Auto-saved user data: {len(memory_manager.user_stats)} users, {len(memory_manager.blocked_users)} blocked")
+    except Exception as e:
+        logger.error(f"Error in periodic save: {e}")
 
 # ─── 🧹 Periodic Cleanup Task ─────────────────────────────────────────────────
-async def periodic_cleanup(application):
+async def periodic_cleanup(context):
     """Periodically clean up inactive users to preserve memory"""
-    while True:
-        try:
-            # Run cleanup every 6 hours
-            await asyncio.sleep(6 * 60 * 60)  # 6 hours
+    try:
+        # Perform cleanup
+        cleaned_users = memory_manager.cleanup_inactive_users()
+        if cleaned_users > 0:
+            logger.info(f"Cleaned up {cleaned_users} inactive users' chat history (all stats/info preserved forever)")
 
-            # Perform cleanup
-            cleaned_users = memory_manager.cleanup_inactive_users()
-            if cleaned_users > 0:
-                logger.info(f"Cleaned up {cleaned_users} inactive users' chat history (all stats/info preserved forever)")
-
-            # Save data after cleanup
-            memory_manager.save_persistent_data()
-            logger.info("Data saved after cleanup")
-        except Exception as e:
-            logger.error(f"Error in periodic cleanup: {e}")
-        except asyncio.CancelledError:
-            logger.info("Periodic cleanup task cancelled")
-            break
+        # Save data after cleanup
+        memory_manager.save_persistent_data()
+        logger.info("Data saved after cleanup")
+    except Exception as e:
+        logger.error(f"Error in periodic cleanup: {e}")
 
 # ─── 🚫 Bot Blocking Detection ─────────────────────────────────────────────────
 async def on_my_chat_member(update, context):
@@ -315,13 +301,13 @@ def handle_task_exception(task, handler_name):
 
 async def post_init(application) -> None:
     """Post initialization function to start background tasks"""
-    # Start periodic save task (every 5 minutes)
-    application.create_task(periodic_save(application))
-    logger.info("💾 Periodic auto-save task started (every 5 minutes)")
+    # Schedule periodic save task (every 5 minutes)
+    application.job_queue.run_repeating(periodic_save, interval=5*60, first=5*60)
+    logger.info("💾 Periodic auto-save task scheduled (every 5 minutes)")
 
-    # Start periodic cleanup task (every 6 hours)
-    application.create_task(periodic_cleanup(application))
-    logger.info("🧹 Periodic cleanup task started (every 6 hours)")
+    # Schedule periodic cleanup task (every 6 hours)
+    application.job_queue.run_repeating(periodic_cleanup, interval=6*60*60, first=6*60*60)
+    logger.info("🧹 Periodic cleanup task scheduled (every 6 hours)")
 
 def main():
     """Main function to start the AQLJON bot"""
@@ -341,7 +327,6 @@ def main():
                .connect_timeout(Config.NETWORK_TIMEOUT)
                .pool_timeout(Config.NETWORK_TIMEOUT)
                .concurrent_updates(True)  # Enable concurrent updates for better performance
-               .job_queue(None)  # Disable job queue to avoid pytz timezone issues
                .post_init(post_init)  # Set post_init callback
                .build())
     except Exception as e:
