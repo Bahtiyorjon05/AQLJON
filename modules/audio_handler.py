@@ -59,7 +59,6 @@ class AudioHandler:
         chat_id = str(update.effective_chat.id) if update and update.effective_chat else "unknown"
         
         # Generate a unique task ID for this audio processing request
-        import time
         task_id = str(int(time.time() * 1000))  # Unique timestamp-based ID
         
         # Show typing indicator for both audio and voice messages

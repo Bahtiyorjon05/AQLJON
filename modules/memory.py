@@ -168,8 +168,8 @@ class MemoryManager:
                 self.user_daily_activity[chat_id][today][activity_type] = 1
 
             # Save persistent data after tracking (async to avoid blocking)
-            # Only save every 10th activity to reduce disk I/O
-            if self.user_stats[chat_id].get(activity_type, 0) % 10 == 0:
+            # Only save every 50th activity to reduce disk I/O
+            if self.user_stats[chat_id].get(activity_type, 0) % 50 == 0:
                 self.save_persistent_data()
 
         except Exception as e:
