@@ -7,36 +7,89 @@ from datetime import datetime, timedelta
 class MemoryManager:
     """Manages user memory, history, and statistics"""
     
-    def __init__(self, max_history=100, max_content_memory=100, max_users=2000, max_inactive_days=10):
-        self.user_history = {}
-        self.user_content_memory = {}
-        self.user_stats = {}
-        self.user_info = {}
-        self.user_contact_messages = {}
-        self.user_daily_activity = {}
-        self.blocked_users = set()
-        
+    def __init__(self, max_history=100, max_content_memory=100, max_users=2000, max_inactive_days=15):
         # Configuration
         self.MAX_HISTORY = max_history
         self.MAX_CONTENT_MEMORY = max_content_memory
         self.MAX_USERS_IN_MEMORY = max_users
         self.MAX_INACTIVE_DAYS = max_inactive_days
-        
-        # No file persistence for Heroku deployment
-    
+
+        # Persistence file paths
+        self.STATS_FILE = "user_stats.json"
+        self.INFO_FILE = "user_info.json"
+        self.BLOCKED_FILE = "blocked_users.json"
+
+        # Initialize data structures
+        self.user_history = {}
+        self.user_content_memory = {}
+        self.user_contact_messages = {}
+        self.user_daily_activity = {}
+
+        # Load persistent data from files (or initialize if files don't exist)
+        self.user_stats = self._load_json(self.STATS_FILE, {})
+        self.user_info = self._load_json(self.INFO_FILE, {})
+        blocked_list = self._load_json(self.BLOCKED_FILE, [])
+        self.blocked_users = set(blocked_list)
+
+        print(f"Loaded {len(self.user_stats)} user stats, {len(self.user_info)} user info, {len(self.blocked_users)} blocked users from persistent storage")
+
+    # ─── 💾 Persistence Helper Methods ─────────────────────────────────────────────────
+    def _load_json(self, filename: str, default):
+        """Load data from JSON file, return default if file doesn't exist"""
+        try:
+            if os.path.exists(filename):
+                with open(filename, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    print(f"Successfully loaded {filename}")
+                    return data
+            else:
+                print(f"{filename} not found, using default")
+                return default
+        except Exception as e:
+            print(f"Error loading {filename}: {e}, using default")
+            return default
+
+    def _save_json(self, filename: str, data):
+        """Save data to JSON file with error handling"""
+        try:
+            # Convert set to list for JSON serialization if needed
+            if isinstance(data, set):
+                data = list(data)
+
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception as e:
+            print(f"Error saving {filename}: {e}")
+            return False
+
+    def save_persistent_data(self):
+        """Save all persistent data (stats, info, blocked users) to disk"""
+        try:
+            # Save user stats
+            self._save_json(self.STATS_FILE, self.user_stats)
+            # Save user info
+            self._save_json(self.INFO_FILE, self.user_info)
+            # Save blocked users (convert set to list)
+            self._save_json(self.BLOCKED_FILE, list(self.blocked_users))
+            return True
+        except Exception as e:
+            print(f"Error in save_persistent_data: {e}")
+            return False
+
     # ─── 📊 User Statistics Tracking ─────────────────────────────────────────────────
     def track_user_activity(self, chat_id: str, activity_type: str, update=None):
-        """Track user activity for statistics with daily analytics"""
+        """Track user activity for statistics with daily analytics - NEVER resets existing stats"""
         # Validate input
         if not chat_id or not isinstance(chat_id, str):
             return
-        
+
         try:
             # Check memory limits before adding new users (but avoid during cleanup)
             if chat_id not in self.user_stats and not hasattr(self, '_in_cleanup'):
                 self.check_memory_limits()
-        
-            # Initialize user stats ONLY if they don't exist (never reset existing stats)
+
+            # Initialize user stats ONLY if they don't exist (NEVER reset existing stats)
             if chat_id not in self.user_stats:
                 self.user_stats[chat_id] = {
                     "messages": 0,
@@ -49,21 +102,33 @@ class MemoryManager:
                     "excel_generated": 0,
                     "word_generated": 0,
                     "ppt_generated": 0,
-                    "first_interaction": time.time(),
+                    "first_interaction": time.time(),  # Set ONCE and NEVER change
                     "last_active": time.time(),
                     "total_characters": 0
                 }
-            
+            else:
+                # CRITICAL: Preserve ALL existing stats - only update last_active time
+                # NEVER reset first_interaction or any counters
+                self.user_stats[chat_id]["last_active"] = time.time()
+
+                # Ensure first_interaction exists and is never reset
+                if "first_interaction" not in self.user_stats[chat_id]:
+                    self.user_stats[chat_id]["first_interaction"] = time.time()
+
+                # Ensure all stat counters exist with defaults if missing
+                for key in ["messages", "photos", "voice_audio", "documents", "videos",
+                           "search_queries", "pdf_generated", "excel_generated",
+                           "word_generated", "ppt_generated", "total_characters"]:
+                    if key not in self.user_stats[chat_id]:
+                        self.user_stats[chat_id][key] = 0
+
             # Increment activity counter - safely handle missing keys
             if activity_type in self.user_stats[chat_id]:
                 self.user_stats[chat_id][activity_type] += 1
             else:
                 # If the activity type doesn't exist in stats, add it
                 self.user_stats[chat_id][activity_type] = 1
-            
-            # Update last active time
-            self.user_stats[chat_id]["last_active"] = time.time()
-            
+
             # Ensure user is also in user_info if update is provided
             if update and update.effective_user:
                 user = update.effective_user
@@ -76,12 +141,12 @@ class MemoryManager:
                     "is_bot": user.is_bot if hasattr(user, 'is_bot') else False,
                     "last_seen": time.time()
                 }
-            
+
             # Track daily activity for analytics
             today = datetime.now().strftime("%Y-%m-%d")
             if chat_id not in self.user_daily_activity:
                 self.user_daily_activity[chat_id] = {}
-            
+
             if today not in self.user_daily_activity[chat_id]:
                 self.user_daily_activity[chat_id][today] = {
                     "messages": 0,
@@ -95,12 +160,18 @@ class MemoryManager:
                     "word_generated": 0,
                     "ppt_generated": 0
                 }
-            
+
             # Safely increment daily activity
             if activity_type in self.user_daily_activity[chat_id][today]:
                 self.user_daily_activity[chat_id][today][activity_type] += 1
             else:
                 self.user_daily_activity[chat_id][today][activity_type] = 1
+
+            # Save persistent data after tracking (async to avoid blocking)
+            # Only save every 10th activity to reduce disk I/O
+            if self.user_stats[chat_id].get(activity_type, 0) % 10 == 0:
+                self.save_persistent_data()
+
         except Exception as e:
             # Log error but don't crash - statistics are not critical
             print(f"Error tracking user activity for {chat_id}: {e}")
@@ -287,35 +358,40 @@ class MemoryManager:
             return []
     
     def cleanup_inactive_users(self):
-        """Remove inactive users' HISTORY and CONTENT ONLY - PRESERVE stats and info for admin panel"""
+        """Remove inactive users' HISTORY and CONTENT ONLY - NEVER TOUCH stats and info for admin panel"""
         try:
             # Set flag to prevent recursion in track_user_activity
             self._in_cleanup = True
-            
+
             current_time = time.time()
             inactive_threshold = current_time - (self.MAX_INACTIVE_DAYS * 24 * 60 * 60)
-            
+
             # Find inactive users (excluding blocked users)
             # Create a copy of items to avoid RuntimeError during iteration
             inactive_users = []
-            for chat_id, stats in list(self.user_stats.items()):
+            for chat_id in list(self.user_history.keys()):  # Only check users with history
                 # Skip blocked users - they should never be cleaned up
                 if chat_id in self.blocked_users:
                     continue
-                    
-                # Convert "now" to actual timestamp for comparison
-                if stats.get("last_active") == "now":
-                    stats["last_active"] = current_time
-                
-                last_active = stats.get("last_active", 0)
-                # If last_active is a string (invalid), treat as very old (0) to mark inactive
-                if isinstance(last_active, str):
-                    last_active = 0
-                
-                if last_active < inactive_threshold:
+
+                # Get last_active from user_stats if exists
+                last_active = 0
+                if chat_id in self.user_stats:
+                    last_active = self.user_stats[chat_id].get("last_active", 0)
+                    # Convert "now" to actual timestamp for comparison
+                    if last_active == "now":
+                        last_active = current_time
+                        self.user_stats[chat_id]["last_active"] = current_time
+                    # If last_active is a string (invalid), treat as current time to avoid accidental deletion
+                    elif isinstance(last_active, str):
+                        last_active = current_time
+                        self.user_stats[chat_id]["last_active"] = current_time
+
+                # Only mark as inactive if they haven't been active for MAX_INACTIVE_DAYS
+                if last_active > 0 and last_active < inactive_threshold:
                     inactive_users.append(chat_id)
-            
-            # Remove inactive users' history and content memory ONLY - KEEP stats and info
+
+            # Remove inactive users' history and content memory ONLY - NEVER TOUCH stats and info
             removed_count = 0
             for chat_id in inactive_users:
                 # Only remove heavy data: history and content memory
@@ -324,13 +400,13 @@ class MemoryManager:
                     removed_count += 1
                 if chat_id in self.user_content_memory:
                     del self.user_content_memory[chat_id]
-                
-                # DO NOT DELETE user_stats or user_info
-                # Keep these for statistics tracking and admin panel visibility
-            
+
+                # NEVER DELETE user_stats or user_info - these MUST persist forever
+                # This ensures all user statistics are visible in admin panel regardless of activity
+
             if removed_count > 0:
-                print(f"Cleaned up {removed_count} inactive users (history only, stats preserved)")
-            
+                print(f"Cleaned up {removed_count} inactive users' history (stats/info preserved forever)")
+
             return removed_count
         except Exception as e:
             print(f"Error during cleanup_inactive_users: {e}")
@@ -340,26 +416,26 @@ class MemoryManager:
             self._in_cleanup = False
     
     def check_memory_limits(self):
-        """Check and enforce memory limits - ONLY remove history and content, PRESERVE stats and info"""
+        """Check and enforce memory limits - ONLY remove history and content, NEVER TOUCH stats and info"""
         try:
             # Set flag to prevent recursion
             if hasattr(self, '_in_cleanup') and self._in_cleanup:
                 return
-            
+
             self._in_cleanup = True
-            
+
             total_users = len(self.user_history)
-            
+
             # Clean up old daily activity data (keep last 30 days only)
             try:
                 self.cleanup_old_daily_activity(max_days=30)
             except Exception as e:
                 print(f"Error cleaning up daily activity: {e}")
-            
+
             if total_users > self.MAX_USERS_IN_MEMORY:
                 print(f"User limit exceeded: {total_users}/{self.MAX_USERS_IN_MEMORY}")
                 cleanup_count = self.cleanup_inactive_users()
-                
+
                 # If still over limit, remove oldest users' HISTORY and CONTENT only (excluding blocked users)
                 # After cleanup, check if we still have too many users with active history
                 if len(self.user_history) > self.MAX_USERS_IN_MEMORY:
@@ -370,34 +446,36 @@ class MemoryManager:
                         # Skip blocked users - never remove their data
                         if chat_id in self.blocked_users:
                             continue
-                        
+
                         # Get last active time from stats (with fallback)
                         last_active = 0
                         if chat_id in self.user_stats:
                             last_active = self.user_stats[chat_id].get("last_active", 0)
+                            # Convert string timestamps to current time to avoid accidental deletion
                             if isinstance(last_active, str):
-                                last_active = 0
-                        
+                                last_active = time.time()
+                                self.user_stats[chat_id]["last_active"] = last_active
+
                         user_activity.append((chat_id, last_active))
-                    
+
                     user_activity.sort(key=lambda x: x[1])  # Sort by last_active (oldest first)
-                    
+
                     # Remove oldest users until under limit
                     to_remove = max(0, len(self.user_history) - self.MAX_USERS_IN_MEMORY + 100)  # Remove extra for buffer
                     removed = 0
                     for i in range(min(to_remove, len(user_activity))):
                         chat_id = user_activity[i][0]
-                        
-                        # ONLY delete history and content_memory, KEEP user_stats and user_info
+
+                        # ONLY delete history and content_memory, NEVER TOUCH user_stats and user_info
                         if chat_id in self.user_history:
                             del self.user_history[chat_id]
                             removed += 1
                         if chat_id in self.user_content_memory:
                             del self.user_content_memory[chat_id]
-                        
-                        # DO NOT DELETE user_stats or user_info - preserve statistics!
-                    
-                    print(f"Removed history for {removed} oldest users to maintain memory limits (stats preserved)")
+
+                        # NEVER DELETE user_stats or user_info - these MUST persist forever for admin panel
+
+                    print(f"Removed history for {removed} oldest users (stats/info preserved forever)")
         except Exception as e:
             print(f"Error in check_memory_limits: {e}")
         finally:
@@ -440,35 +518,73 @@ class MemoryManager:
     
     # ─── 🚫 Blocking Management (No Persistence for Heroku) ─────────────────────────
     def block_user(self, chat_id: str):
-        """Mark user as blocked - blocked users' stats are NEVER deleted"""
+        """Mark user as blocked - blocked users' stats and info are PERMANENTLY preserved"""
         try:
             if not chat_id or not isinstance(chat_id, str):
                 return
-            
+
             self.blocked_users.add(chat_id)
-            
-            # Update last_active to current time when blocking
+
+            # Update last_active to current time when blocking to prevent any cleanup
             if chat_id in self.user_stats:
                 self.user_stats[chat_id]["last_active"] = time.time()
-            
-            # No file persistence for Heroku deployment
+            else:
+                # If user doesn't have stats yet, create them to ensure they're tracked
+                self.user_stats[chat_id] = {
+                    "messages": 0,
+                    "photos": 0,
+                    "voice_audio": 0,
+                    "documents": 0,
+                    "videos": 0,
+                    "search_queries": 0,
+                    "pdf_generated": 0,
+                    "excel_generated": 0,
+                    "word_generated": 0,
+                    "ppt_generated": 0,
+                    "first_interaction": time.time(),
+                    "last_active": time.time(),
+                    "total_characters": 0
+                }
+
+            # Blocked users MUST be in admin stats - their stats are NEVER deleted
+            # Save to persistent storage immediately
+            self.save_persistent_data()
         except Exception as e:
             print(f"Error blocking user {chat_id}: {e}")
-    
+
     def unblock_user(self, chat_id: str):
-        """Unmark user as blocked and restore their activity timestamp"""
+        """Unmark user as blocked and restore their activity timestamp - stats always preserved"""
         try:
             if not chat_id or not isinstance(chat_id, str):
                 return
-            
+
             if chat_id in self.blocked_users:
                 self.blocked_users.remove(chat_id)
-            
+
             # Update last_active to current time when unblocking
             if chat_id in self.user_stats:
                 self.user_stats[chat_id]["last_active"] = time.time()
-            
-            # No file persistence for Heroku deployment
+            else:
+                # If user doesn't have stats, create them
+                self.user_stats[chat_id] = {
+                    "messages": 0,
+                    "photos": 0,
+                    "voice_audio": 0,
+                    "documents": 0,
+                    "videos": 0,
+                    "search_queries": 0,
+                    "pdf_generated": 0,
+                    "excel_generated": 0,
+                    "word_generated": 0,
+                    "ppt_generated": 0,
+                    "first_interaction": time.time(),
+                    "last_active": time.time(),
+                    "total_characters": 0
+                }
+
+            # Stats are ALWAYS preserved regardless of block status
+            # Save to persistent storage immediately
+            self.save_persistent_data()
         except Exception as e:
             print(f"Error unblocking user {chat_id}: {e}")
     
@@ -501,16 +617,17 @@ class MemoryManager:
             stats = {
                 "total_users": len(self.get_all_users()),
                 "blocked_users": len(self.blocked_users),
-                "total_messages": sum(len(history) for history in self.user_history.values()),
-                "total_photos": sum(stats.get("photos", 0) for stats in self.user_stats.values()),
-                "total_voice": sum(stats.get("voice_audio", 0) for stats in self.user_stats.values()),
-                "total_documents": sum(stats.get("documents", 0) for stats in self.user_stats.values()),
-                "total_videos": sum(stats.get("videos", 0) for stats in self.user_stats.values()),
-                "total_searches": sum(stats.get("search_queries", 0) for stats in self.user_stats.values()),
-                "total_pdf": sum(stats.get("pdf_generated", 0) for stats in self.user_stats.values()),
-                "total_excel": sum(stats.get("excel_generated", 0) for stats in self.user_stats.values()),
-                "total_word": sum(stats.get("word_generated", 0) for stats in self.user_stats.values()),
-                "total_ppt": sum(stats.get("ppt_generated", 0) for stats in self.user_stats.values())
+                # Count messages from user_stats instead of user_history since history gets cleaned up
+                "total_messages": sum(user_stats.get("messages", 0) for user_stats in self.user_stats.values()),
+                "total_photos": sum(user_stats.get("photos", 0) for user_stats in self.user_stats.values()),
+                "total_voice": sum(user_stats.get("voice_audio", 0) for user_stats in self.user_stats.values()),
+                "total_documents": sum(user_stats.get("documents", 0) for user_stats in self.user_stats.values()),
+                "total_videos": sum(user_stats.get("videos", 0) for user_stats in self.user_stats.values()),
+                "total_searches": sum(user_stats.get("search_queries", 0) for user_stats in self.user_stats.values()),
+                "total_pdf": sum(user_stats.get("pdf_generated", 0) for user_stats in self.user_stats.values()),
+                "total_excel": sum(user_stats.get("excel_generated", 0) for user_stats in self.user_stats.values()),
+                "total_word": sum(user_stats.get("word_generated", 0) for user_stats in self.user_stats.values()),
+                "total_ppt": sum(user_stats.get("ppt_generated", 0) for user_stats in self.user_stats.values())
             }
             return stats
         except Exception as e:
