@@ -113,6 +113,17 @@ async def periodic_cleanup(app):
             logger.info("Periodic cleanup task cancelled")
             break
 
+# ─── ⚙️ Application Post-Initialization ─────────────────────────────────────────────────
+async def post_init(application):
+    """Initialize background tasks after event loop starts"""
+    # Start periodic save task (every 5 minutes)
+    asyncio.create_task(periodic_save(application))
+    logger.info("💾 Periodic auto-save task started (every 5 minutes)")
+
+    # Start periodic cleanup task (every 6 hours)
+    asyncio.create_task(periodic_cleanup(application))
+    logger.info("🧹 Periodic cleanup task started (every 6 hours)")
+
 # ─── 🚫 Bot Blocking Detection ─────────────────────────────────────────────────
 async def on_my_chat_member(update, context):
     """Handle my_chat_member updates to detect when users block/unblock the bot"""
@@ -333,6 +344,7 @@ def main():
                .pool_timeout(Config.NETWORK_TIMEOUT)
                .concurrent_updates(True)  # Enable concurrent updates for better performance
                .job_queue(None)  # Disable job queue to avoid pytz timezone issues
+               .post_init(post_init)  # Initialize background tasks after event loop starts
                .build())
     except Exception as e:
         logger.error(f"Failed to build application: {e}")
@@ -378,15 +390,8 @@ def main():
     logger.info("🛡️ Enhanced error handling and rate limiting enabled")
     logger.info("🔄 Concurrent updates enabled for maximum performance")
     logger.info(f"💾 Loaded {len(memory_manager.user_stats)} users from persistent storage")
+    logger.info("⏳ Background tasks will start after event loop initialization...")
 
-    # Start periodic save task (every 5 minutes)
-    save_task = asyncio.create_task(periodic_save(app))
-    logger.info("💾 Periodic auto-save task started (every 5 minutes)")
-
-    # Start periodic cleanup task (every 6 hours)
-    cleanup_task = asyncio.create_task(periodic_cleanup(app))
-    logger.info("🧹 Periodic cleanup task started (every 6 hours)")
-    
     # Run with enhanced polling settings and better error handling
     retry_count = 0
     max_retries = 5
@@ -426,9 +431,7 @@ def main():
     memory_manager.save_persistent_data()
     logger.info("✅ Data saved successfully")
 
-    # Cancel the background tasks when the bot stops
-    save_task.cancel()
-    cleanup_task.cancel()
+    # Background tasks will be cancelled automatically when event loop stops
 
 if __name__ == "__main__":
     main()
