@@ -74,30 +74,44 @@ async def search_web(query: str) -> str:
 command_handlers = CommandHandlers(memory_manager, doc_generator, search_web)
 
 # ─── 💾 Periodic Data Persistence Task ─────────────────────────────────────────────────
-async def periodic_save(context):
+async def periodic_save(app):
     """Periodically save user data to prevent loss on dyno restart"""
-    try:
-        # Save all persistent data
-        saved = memory_manager.save_persistent_data()
-        if saved:
-            logger.info(f"Auto-saved user data: {len(memory_manager.user_stats)} users, {len(memory_manager.blocked_users)} blocked")
-    except Exception as e:
-        logger.error(f"Error in periodic save: {e}")
+    while True:
+        try:
+            # Save data every 5 minutes to prevent data loss
+            await asyncio.sleep(5 * 60)  # 5 minutes
+
+            # Save all persistent data
+            saved = memory_manager.save_persistent_data()
+            if saved:
+                logger.info(f"Auto-saved user data: {len(memory_manager.user_stats)} users, {len(memory_manager.blocked_users)} blocked")
+        except Exception as e:
+            logger.error(f"Error in periodic save: {e}")
+        except asyncio.CancelledError:
+            logger.info("Periodic save task cancelled")
+            break
 
 # ─── 🧹 Periodic Cleanup Task ─────────────────────────────────────────────────
-async def periodic_cleanup(context):
+async def periodic_cleanup(app):
     """Periodically clean up inactive users to preserve memory"""
-    try:
-        # Perform cleanup
-        cleaned_users = memory_manager.cleanup_inactive_users()
-        if cleaned_users > 0:
-            logger.info(f"Cleaned up {cleaned_users} inactive users' chat history (all stats/info preserved forever)")
+    while True:
+        try:
+            # Run cleanup every 6 hours
+            await asyncio.sleep(6 * 60 * 60)  # 6 hours
 
-        # Save data after cleanup
-        memory_manager.save_persistent_data()
-        logger.info("Data saved after cleanup")
-    except Exception as e:
-        logger.error(f"Error in periodic cleanup: {e}")
+            # Perform cleanup
+            cleaned_users = memory_manager.cleanup_inactive_users()
+            if cleaned_users > 0:
+                logger.info(f"Cleaned up {cleaned_users} inactive users' chat history (all stats/info preserved forever)")
+
+            # Save data after cleanup
+            memory_manager.save_persistent_data()
+            logger.info("Data saved after cleanup")
+        except Exception as e:
+            logger.error(f"Error in periodic cleanup: {e}")
+        except asyncio.CancelledError:
+            logger.info("Periodic cleanup task cancelled")
+            break
 
 # ─── 🚫 Bot Blocking Detection ─────────────────────────────────────────────────
 async def on_my_chat_member(update, context):
@@ -299,15 +313,6 @@ def handle_task_exception(task, handler_name):
 
 # ─── 🚀 Main Application Setup ─────────────────────────────────────────────────
 
-async def post_init(application) -> None:
-    """Post initialization function to start background tasks"""
-    # Schedule periodic save task (every 5 minutes)
-    application.job_queue.run_repeating(periodic_save, interval=5*60, first=5*60)
-    logger.info("💾 Periodic auto-save task scheduled (every 5 minutes)")
-
-    # Schedule periodic cleanup task (every 6 hours)
-    application.job_queue.run_repeating(periodic_cleanup, interval=6*60*60, first=6*60*60)
-    logger.info("🧹 Periodic cleanup task scheduled (every 6 hours)")
 
 def main():
     """Main function to start the AQLJON bot"""
@@ -327,7 +332,7 @@ def main():
                .connect_timeout(Config.NETWORK_TIMEOUT)
                .pool_timeout(Config.NETWORK_TIMEOUT)
                .concurrent_updates(True)  # Enable concurrent updates for better performance
-               .post_init(post_init)  # Set post_init callback
+               .job_queue(None)  # Disable job queue to avoid pytz timezone issues
                .build())
     except Exception as e:
         logger.error(f"Failed to build application: {e}")
@@ -374,6 +379,14 @@ def main():
     logger.info("🔄 Concurrent updates enabled for maximum performance")
     logger.info(f"💾 Loaded {len(memory_manager.user_stats)} users from persistent storage")
 
+    # Start periodic save task (every 5 minutes)
+    save_task = asyncio.create_task(periodic_save(app))
+    logger.info("💾 Periodic auto-save task started (every 5 minutes)")
+
+    # Start periodic cleanup task (every 6 hours)
+    cleanup_task = asyncio.create_task(periodic_cleanup(app))
+    logger.info("🧹 Periodic cleanup task started (every 6 hours)")
+    
     # Run with enhanced polling settings and better error handling
     retry_count = 0
     max_retries = 5
@@ -412,6 +425,10 @@ def main():
     logger.info("💾 Saving data before shutdown...")
     memory_manager.save_persistent_data()
     logger.info("✅ Data saved successfully")
+
+    # Cancel the background tasks when the bot stops
+    save_task.cancel()
+    cleanup_task.cancel()
 
 if __name__ == "__main__":
     main()

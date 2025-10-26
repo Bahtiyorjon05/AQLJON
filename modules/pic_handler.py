@@ -52,6 +52,7 @@ class PhotoHandler:
         chat_id = str(update.effective_chat.id) if update and update.effective_chat else "unknown"
         
         # Generate a unique task ID for this photo processing request
+        import time
         task_id = str(int(time.time() * 1000))  # Unique timestamp-based ID
         
         await send_typing(update)

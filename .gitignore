@@ -220,6 +220,11 @@ user_stats.json
 user_info.json
 blocked_users.json
 
+# Firebase credentials (NEVER commit these!)
+firebase-credentials.json
+*firebase*.json
+!app.json
+
 # Test and development files
 test_*.py
 *_test.py

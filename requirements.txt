@@ -11,3 +11,4 @@ reportlab==4.4.4
 pillow>=10.0.0
 pytz
 APScheduler<4.0.0
+firebase-admin==6.5.0

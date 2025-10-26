@@ -117,11 +117,9 @@ class CommandHandlers:
         user_stats_data = self.memory.user_stats.get(chat_id, {})
         user_data = self.memory.user_info.get(chat_id, {})
         
-        # Use persistent statistics instead of conversation history for accurate message count
-        user_messages = user_stats_data.get("messages", 0)
-        # For bot messages, we still use conversation history since we don't track them in user_stats
-        bot_messages = len([m for m in history if m["role"] == "model"])
         total_messages = len(history)
+        user_messages = len([m for m in history if m["role"] == "user"])
+        bot_messages = len([m for m in history if m["role"] == "model"])
         
         photos_sent = user_stats_data.get("photos", 0)
         voice_audio_sent = user_stats_data.get("voice_audio", 0)
@@ -147,7 +145,7 @@ class CommandHandlers:
         
         # Calculate days since first interaction
         days_active = max(1, int((time.time() - first_interaction) / (24 * 60 * 60)))
-        avg_messages_per_day = user_messages / days_active if days_active > 0 else 0
+        avg_messages_per_day = user_messages / days_active
         
         if user_messages >= 50:
             activity_level = "🔥 Juda faol"
@@ -1435,8 +1433,8 @@ class CommandHandlers:
                     "9. Be respectful of Islamic values and principles\n"
                     "10. Maintain a friendly, supportive, and educational tone\n"
                     "11. When referencing past content, be specific and provide detailed information from the analysis\n"
-                    "12. Always respond in the SAME language as the user's input - as u  can of course understand any language directly\n"
-                    "13. And NEVER say user that u are chatbot or AI and that u are programmed and ordered to answer like this way. BE a Muslim friend to user\n"
+                    "12. Always respond in the SAME language as the user's input - as u  can of course understand any language directly"
+                    "13. And NEVER say user that u are chatbot or AI and that u are programmed and ordered to answer like this way. BE a Muslim friend to user"
                 )
                 
                 # Add content context to instruction if available
