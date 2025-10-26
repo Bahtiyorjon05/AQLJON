@@ -52,6 +52,7 @@ class VideoHandler:
         chat_id = str(update.effective_chat.id) if update and update.effective_chat else "unknown"
         
         # Generate a unique task ID for this video processing request
+        import time
         task_id = str(int(time.time() * 1000))  # Unique timestamp-based ID
         
         await send_typing(update)
@@ -243,19 +244,12 @@ class VideoHandler:
                 await safe_edit_message(analyzing_msg, error_msg, parse_mode=ParseMode.HTML)
             
             finally:
-                # Always clean up temp file with better error handling for Windows
-                if tmp_path is not None and os.path.exists(tmp_path):
-                    for attempt in range(3):  # Retry up to 3 times
-                        try:
-                            os.unlink(tmp_path)
-                            break
-                        except PermissionError as e:
-                            logger.warning(f"Permission error on cleanup attempt {attempt + 1}: {e}")
-                            if attempt < 2:  # Don't sleep on the last attempt
-                                await asyncio.sleep(1)
-                        except Exception as e:
-                            logger.error(f"Unexpected error during cleanup: {e}")
-                            break
+                # Always clean up temp file
+                try:
+                    if tmp_path is not None and os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to cleanup temp file: {cleanup_error}")
                 
         except Exception as e:
             logger.error(f"Video handler error: {e}")

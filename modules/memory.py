@@ -2,6 +2,8 @@ import time
 import json
 import os
 from datetime import datetime, timedelta
+import firebase_admin
+from firebase_admin import credentials, firestore
 
 # ─── 🧠 Enhanced Memory Management ─────────────────────────────────────────────────
 class MemoryManager:
@@ -14,10 +16,8 @@ class MemoryManager:
         self.MAX_USERS_IN_MEMORY = max_users
         self.MAX_INACTIVE_DAYS = max_inactive_days
 
-        # Persistence file paths
-        self.STATS_FILE = "user_stats.json"
-        self.INFO_FILE = "user_info.json"
-        self.BLOCKED_FILE = "blocked_users.json"
+        # Initialize Firebase
+        self._init_firebase()
 
         # Initialize data structures
         self.user_history = {}
@@ -25,56 +25,161 @@ class MemoryManager:
         self.user_contact_messages = {}
         self.user_daily_activity = {}
 
-        # Load persistent data from files (or initialize if files don't exist)
-        self.user_stats = self._load_json(self.STATS_FILE, {})
-        self.user_info = self._load_json(self.INFO_FILE, {})
-        blocked_list = self._load_json(self.BLOCKED_FILE, [])
-        self.blocked_users = set(blocked_list)
+        # Initialize persistent data structures
+        self.user_stats = {}
+        self.user_info = {}
+        self.blocked_users = set()
 
-        print(f"Loaded {len(self.user_stats)} user stats, {len(self.user_info)} user info, {len(self.blocked_users)} blocked users from persistent storage")
+        # Load persistent data from Firestore
+        self._load_from_firestore()
 
-    # ─── 💾 Persistence Helper Methods ─────────────────────────────────────────────────
-    def _load_json(self, filename: str, default):
-        """Load data from JSON file, return default if file doesn't exist"""
+        print(f"Loaded {len(self.user_stats)} user stats, {len(self.user_info)} user info, {len(self.blocked_users)} blocked users from Firestore")
+
+    # ─── 💾 Firebase Initialization ─────────────────────────────────────────────────
+    def _init_firebase(self):
+        """Initialize Firebase connection"""
         try:
-            if os.path.exists(filename):
-                with open(filename, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    print(f"Successfully loaded {filename}")
-                    return data
-            else:
-                print(f"{filename} not found, using default")
-                return default
+            # Check if already initialized
+            if firebase_admin._apps:
+                self.db = firestore.client()
+                print("✅ Firebase already initialized, reusing connection")
+                return
+
+            # Get credentials from environment variable
+            firebase_creds_json = os.getenv("FIREBASE_CREDENTIALS")
+
+            if not firebase_creds_json:
+                print("⚠️  WARNING: FIREBASE_CREDENTIALS not found. Running in local-only mode (data will be lost on restart).")
+                self.db = None
+                return
+
+            # Parse JSON credentials
+            creds_dict = json.loads(firebase_creds_json)
+            cred = credentials.Certificate(creds_dict)
+
+            # Initialize Firebase
+            firebase_admin.initialize_app(cred)
+            self.db = firestore.client()
+
+            print("✅ Firebase Firestore connected successfully!")
+
         except Exception as e:
-            print(f"Error loading {filename}: {e}, using default")
-            return default
+            print(f"❌ Firebase initialization failed: {e}")
+            print("⚠️  Running in local-only mode (data will be lost on restart)")
+            self.db = None
 
-    def _save_json(self, filename: str, data):
-        """Save data to JSON file with error handling"""
+    def _load_from_firestore(self):
+        """Load all user data from Firestore"""
+        if not self.db:
+            print("⚠️  Firestore not available, skipping load")
+            return
+
         try:
-            # Convert set to list for JSON serialization if needed
-            if isinstance(data, set):
-                data = list(data)
+            # Load all users from Firestore
+            users_ref = self.db.collection('users')
+            users = users_ref.stream()
 
-            with open(filename, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            loaded_count = 0
+            for user_doc in users:
+                chat_id = user_doc.id
+                data = user_doc.to_dict()
+
+                # Load user stats
+                if 'stats' in data:
+                    self.user_stats[chat_id] = data['stats']
+
+                # Load user info
+                if 'info' in data:
+                    self.user_info[chat_id] = data['info']
+
+                # Load blocked status
+                if data.get('blocked', False):
+                    self.blocked_users.add(chat_id)
+
+                loaded_count += 1
+
+            print(f"✅ Loaded {loaded_count} users from Firestore")
+
+        except Exception as e:
+            print(f"❌ Error loading from Firestore: {e}")
+
+    def _save_to_firestore(self, chat_id: str):
+        """Save a single user's data to Firestore"""
+        if not self.db:
+            return False
+
+        try:
+            user_ref = self.db.collection('users').document(chat_id)
+
+            # Prepare data
+            data = {}
+
+            if chat_id in self.user_stats:
+                data['stats'] = self.user_stats[chat_id]
+
+            if chat_id in self.user_info:
+                data['info'] = self.user_info[chat_id]
+
+            data['blocked'] = chat_id in self.blocked_users
+            data['last_updated'] = firestore.SERVER_TIMESTAMP
+
+            # Save to Firestore (merge=True to avoid overwriting existing fields)
+            user_ref.set(data, merge=True)
+
             return True
+
         except Exception as e:
-            print(f"Error saving {filename}: {e}")
+            print(f"❌ Error saving {chat_id} to Firestore: {e}")
             return False
 
     def save_persistent_data(self):
-        """Save all persistent data (stats, info, blocked users) to disk"""
+        """Save all persistent data to Firestore"""
+        if not self.db:
+            return False
+
         try:
-            # Save user stats
-            self._save_json(self.STATS_FILE, self.user_stats)
-            # Save user info
-            self._save_json(self.INFO_FILE, self.user_info)
-            # Save blocked users (convert set to list)
-            self._save_json(self.BLOCKED_FILE, list(self.blocked_users))
+            # Save all users in batch
+            batch = self.db.batch()
+            save_count = 0
+
+            # Combine all chat_ids from stats, info, and blocked users
+            all_chat_ids = set()
+            all_chat_ids.update(self.user_stats.keys())
+            all_chat_ids.update(self.user_info.keys())
+            all_chat_ids.update(self.blocked_users)
+
+            for chat_id in all_chat_ids:
+                user_ref = self.db.collection('users').document(chat_id)
+
+                # Prepare data
+                data = {'last_updated': firestore.SERVER_TIMESTAMP}
+
+                if chat_id in self.user_stats:
+                    data['stats'] = self.user_stats[chat_id]
+
+                if chat_id in self.user_info:
+                    data['info'] = self.user_info[chat_id]
+
+                data['blocked'] = chat_id in self.blocked_users
+
+                batch.set(user_ref, data, merge=True)
+                save_count += 1
+
+                # Firestore batch limit is 500, commit and start new batch
+                if save_count % 450 == 0:
+                    batch.commit()
+                    batch = self.db.batch()
+                    print(f"  💾 Saved batch of {save_count} users...")
+
+            # Commit final batch
+            if save_count % 450 != 0:
+                batch.commit()
+
+            print(f"✅ Saved {save_count} users to Firestore")
             return True
+
         except Exception as e:
-            print(f"Error in save_persistent_data: {e}")
+            print(f"❌ Error saving to Firestore: {e}")
             return False
 
     # ─── 📊 User Statistics Tracking ─────────────────────────────────────────────────
@@ -167,10 +272,9 @@ class MemoryManager:
             else:
                 self.user_daily_activity[chat_id][today][activity_type] = 1
 
-            # Save persistent data after tracking (async to avoid blocking)
-            # Only save every 50th activity to reduce disk I/O
-            if self.user_stats[chat_id].get(activity_type, 0) % 50 == 0:
-                self.save_persistent_data()
+            # Save to Firestore every 10th activity to reduce writes (stay within free tier)
+            if self.user_stats[chat_id].get(activity_type, 0) % 10 == 0:
+                self._save_to_firestore(chat_id)
 
         except Exception as e:
             # Log error but don't crash - statistics are not critical
@@ -547,8 +651,8 @@ class MemoryManager:
                 }
 
             # Blocked users MUST be in admin stats - their stats are NEVER deleted
-            # Save to persistent storage immediately
-            self.save_persistent_data()
+            # Save to Firestore immediately
+            self._save_to_firestore(chat_id)
         except Exception as e:
             print(f"Error blocking user {chat_id}: {e}")
 
@@ -583,8 +687,8 @@ class MemoryManager:
                 }
 
             # Stats are ALWAYS preserved regardless of block status
-            # Save to persistent storage immediately
-            self.save_persistent_data()
+            # Save to Firestore immediately
+            self._save_to_firestore(chat_id)
         except Exception as e:
             print(f"Error unblocking user {chat_id}: {e}")
     
