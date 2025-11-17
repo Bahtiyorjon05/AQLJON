@@ -1,0 +1,55 @@
+# Heroku Slug Optimization - exclude unnecessary files
+
+# Documentation
+*.md
+README*
+LICENSE
+CHANGELOG*
+docs/
+*.txt.bak
+
+# Tests
+tests/
+test/
+*_test.py
+test_*.py
+*.test.js
+
+# Development files
+.vscode/
+.idea/
+*.sublime-*
+.DS_Store
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Vector stores (will be created on Heroku)
+vector_stores/
+
+# Local environment
+.env.local
+.env.*.local
+
+# Jupyter notebooks
+*.ipynb
+.ipynb_checkpoints/
+
+# Coverage reports
+htmlcov/
+.coverage
+.pytest_cache/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
