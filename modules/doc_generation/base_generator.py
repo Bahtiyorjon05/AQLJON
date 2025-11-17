@@ -173,17 +173,53 @@ class BaseDocumentGenerator(ABC):
             'awesome': {
                 'primary': '#2980B9',      # Strong Blue
                 'secondary': '#27AE60',    # Emerald Green
-                'accent': '#F1C40F',       # Gold
+                'accent': '#F39C12',       # Vibrant Orange
                 'background': '#FFFFFF',   # Clean White
                 'text': '#2C3E50',         # Dark navy
                 'light_text': '#7F8C8D',   # Gray
                 'highlight': '#1ABC9C',    # Turquoise
                 'success': '#27AE60',      # Emerald Green
-                'warning': '#3498DB',      # Blue
-                'info': '#2980B9',         # Strong Blue
-                'divider': '#ECF0F1',      # Light gray
-                'education': '#27AE60',    # Emerald Green for educational content
-                'insight': '#1ABC9C',      # Turquoise for insights
+                'warning': '#F39C12',      # Vibrant Orange
+                'info': '#3498DB',         # Bright Blue
+                'divider': '#BDC3C7',      # Silver
+                'education': '#9B59B6',    # Amethyst for educational content
+                'insight': '#16A085',      # Green Sea for insights
+                'gradient_start': '#3498DB',  # Gradient start (Blue)
+                'gradient_end': '#2ECC71',    # Gradient end (Green)
+            },
+            'stunning': {
+                'primary': '#8E44AD',      # Rich Purple
+                'secondary': '#3498DB',    # Azure
+                'accent': '#E74C3C',       # Alizarin (Red)
+                'background': '#ECF0F1',   # Clouds
+                'text': '#2C3E50',         # Midnight Blue
+                'light_text': '#95A5A6',   # Concrete
+                'highlight': '#F1C40F',    # Sunflower
+                'success': '#2ECC71',      # Emerald
+                'warning': '#E67E22',      # Carrot
+                'info': '#3498DB',         # Peter River
+                'divider': '#BDC3C7',      # Silver
+                'education': '#9B59B6',    # Amethyst
+                'insight': '#1ABC9C',      # Turquoise
+                'gradient_start': '#8E44AD',  # Purple
+                'gradient_end': '#3498DB',    # Blue
+            },
+            'premium': {
+                'primary': '#34495E',      # Wet Asphalt
+                'secondary': '#F39C12',    # Orange
+                'accent': '#E74C3C',       # Red
+                'background': '#FFFFFF',   # White
+                'text': '#2C3E50',         # Navy
+                'light_text': '#7F8C8D',   # Gray
+                'highlight': '#F1C40F',    # Gold
+                'success': '#27AE60',      # Nephritis
+                'warning': '#D35400',      # Pumpkin
+                'info': '#2980B9',         # Belize Hole
+                'divider': '#95A5A6',      # Concrete
+                'education': '#16A085',    # Green Sea
+                'insight': '#C0392B',      # Pomegranate
+                'gradient_start': '#34495E',  # Dark
+                'gradient_end': '#F39C12',    # Orange
             }
         }
     
