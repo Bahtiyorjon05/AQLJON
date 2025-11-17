@@ -14,8 +14,16 @@ from modules.video_handler import VideoHandler
 from modules.pic_handler import PhotoHandler
 from modules.doc_handler import DocumentHandler
 from modules.command_handlers import CommandHandlers
-# Phase 2: RAG system
-from modules.rag import VectorStoreManager, RAGChain
+
+# Phase 2: RAG system (optional - only if dependencies installed)
+try:
+    from modules.rag import VectorStoreManager, RAGChain
+    RAG_AVAILABLE = True
+except ImportError:
+    logger.warning("⚠️ RAG dependencies not installed. RAG features will be disabled.")
+    RAG_AVAILABLE = False
+    VectorStoreManager = None
+    RAGChain = None
 
 # ─── 📝 Logging ────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -38,14 +46,19 @@ memory_manager = MemoryManager(
 doc_generator = DocumentGenerator(model, memory_manager)
 
 # ─── 🔍 RAG System (Phase 2) ─────────────────────────────────────────────────
-try:
-    vector_store = VectorStoreManager()
-    rag_chain = RAGChain(model, vector_store)
-    logger.info("✅ RAG system initialized successfully")
-except Exception as e:
-    logger.warning(f"⚠️ RAG system initialization failed: {e}. Continuing without RAG...")
+if RAG_AVAILABLE:
+    try:
+        vector_store = VectorStoreManager()
+        rag_chain = RAGChain(model, vector_store)
+        logger.info("✅ RAG system initialized successfully")
+    except Exception as e:
+        logger.warning(f"⚠️ RAG system initialization failed: {e}. Continuing without RAG...")
+        vector_store = None
+        rag_chain = None
+else:
     vector_store = None
     rag_chain = None
+    logger.info("ℹ️ RAG system disabled (dependencies not installed)")
 
 # ─── 🎛️ Media Handlers ─────────────────────────────────────────────────
 audio_handler = AudioHandler(model, memory_manager)
