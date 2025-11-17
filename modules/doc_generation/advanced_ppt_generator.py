@@ -17,6 +17,7 @@ from pptx.dml.color import RGBColor
 from modules.doc_generation.base_generator import BaseDocumentGenerator
 from modules.utils import safe_reply, send_typing
 from modules.config import Config
+from modules.retry_utils import generate_content_with_retry, generate_content_with_retry_sync
 
 logger = logging.getLogger(__name__)
 
@@ -345,9 +346,9 @@ class AdvancedPPTGenerator(BaseDocumentGenerator):
             If the topic doesn't clearly fit any category, respond with "default".
             """
             
-            # Use a simpler approach for topic detection - let Gemini decide
+            # Use a simpler approach for topic detection - let Gemini decide with retry logic
             # This is more reliable than keyword matching for multilingual content
-            response = self.model.generate_content(classification_prompt)
+            response = generate_content_with_retry_sync(self.model, classification_prompt)
             
             if response and response.text:
                 detected_category = response.text.strip().lower()
@@ -597,7 +598,9 @@ class AdvancedPPTGenerator(BaseDocumentGenerator):
                 prompt += f"\n\nAdditional context: {content_context}"
             
             prompt += """
-            
+
+            CRITICAL: Structure for MAXIMUM VISUAL IMPACT with charts and data:
+
             Please structure your response in the following JSON format:
             {
                 "title_slide": {
@@ -609,7 +612,13 @@ class AdvancedPPTGenerator(BaseDocumentGenerator):
                     {
                         "title": "Slide Title",
                         "content": ["Bullet point 1", "Bullet point 2", ...],
-                        "type": "content|data|timeline|etc."
+                        "type": "content|data|chart|comparison|timeline",
+                        "chart_data": {
+                            "type": "bar|pie|line",
+                            "labels": ["Label1", "Label2", "Label3"],
+                            "values": [30, 45, 25]
+                        },
+                        "layout": "single|two_column|comparison"
                     },
                     ...
                 ],
@@ -618,22 +627,28 @@ class AdvancedPPTGenerator(BaseDocumentGenerator):
                     "content": ["Summary point 1", "Summary point 2", ...]
                 }
             }
-            
+
             Requirements:
-            1. All content should be in the SAME LANGUAGE as the user's input
-            2. Include relevant emojis where appropriate
-            3. Keep bullet points concise but informative
-            4. Ensure content matches the slide structure defined
-            5. Make it engaging and professionally formatted
-            6. Create at least 5 content slides for comprehensive coverage
-            7. Each slide should have 3-5 bullet points
+            1. All content in SAME LANGUAGE as user's input
+            2. Include 2-3 DATA SLIDES with chart_data (bar, pie, or line charts)
+            3. Suggest layout type for each slide:
+               - "single": Standard single column
+               - "two_column": Left content, right visual/chart
+               - "comparison": Side-by-side comparison
+            4. For data slides, provide realistic numbers in chart_data
+            5. Include relevant emojis strategically
+            6. Create at least 6-8 slides total
+            7. Each slide 3-5 bullet points
             8. Use clear, professional language
+            9. Make data realistic and topic-relevant
+            10. Include at least ONE chart per presentation
             """
             
-            # Generate content with Gemini with increased timeout
+            # Generate content with Gemini with increased timeout and retry logic
             try:
-                response = await asyncio.wait_for(
-                    asyncio.to_thread(lambda: self.model.generate_content(prompt)),
+                response = await generate_content_with_retry(
+                    self.model,
+                    prompt,
                     timeout=90.0  # Increased timeout to 90 seconds for complex content
                 )
                 if response and response.text:
@@ -668,10 +683,11 @@ class AdvancedPPTGenerator(BaseDocumentGenerator):
                 Keep it professional and engaging.
                 """
                 
-                # Use a longer timeout for the retry since it's simpler
+                # Use a longer timeout for the retry since it's simpler and add retry logic
                 try:
-                    response = await asyncio.wait_for(
-                        asyncio.to_thread(lambda: self.model.generate_content(simple_prompt)),
+                    response = await generate_content_with_retry(
+                        self.model,
+                        simple_prompt,
                         timeout=120.0  # Increased timeout to 120 seconds for the retry
                     )
                     if response and response.text:
@@ -827,7 +843,7 @@ class AdvancedPPTGenerator(BaseDocumentGenerator):
             title.text_frame.paragraphs[0].font.color.rgb = RGBColor.from_string(
                 color_scheme.get('primary', '#2C3E50').lstrip('#')
             )
-            title.text_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
+            title.text_frame.paragraphs[0].alignment = PP_ALIGN.LEFT  # Professional left alignment
             
             # Center vertically as well
             title.text_frame.vertical_anchor = MSO_VERTICAL_ANCHOR.MIDDLE  # Middle alignment
@@ -884,7 +900,7 @@ class AdvancedPPTGenerator(BaseDocumentGenerator):
             title.text_frame.paragraphs[0].font.color.rgb = RGBColor.from_string(
                 color_scheme.get('primary', '#2C3E50').lstrip('#')
             )
-            title.text_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
+            title.text_frame.paragraphs[0].alignment = PP_ALIGN.LEFT  # Professional left alignment
         
         # Add agenda content with better formatting and centering
         content_placeholder = slide.placeholders[1] if len(slide.placeholders) > 1 else None
@@ -907,36 +923,70 @@ class AdvancedPPTGenerator(BaseDocumentGenerator):
                 )
                 p.space_before = Pt(15)  # Add spacing before each item
                 p.space_after = Pt(15)   # Add spacing after each item
-                p.alignment = PP_ALIGN.CENTER  # Center align text
+                p.alignment = PP_ALIGN.LEFT  # Professional left alignment
                 p.level = 0  # No indentation
 
     def _create_content_slide(self, prs, slide_data: Dict[str, Any],
                              visual_elements: Dict[str, Any], color_scheme: Dict[str, str]):
-        """Create a content slide with visual enhancements and centered content."""
-        slide_layout = prs.slide_layouts[1]  # Title and Content layout
+        """Create a content slide with visual enhancements and support for charts."""
+        # Check if this slide should have a chart
+        has_chart = 'chart_data' in slide_data and slide_data['chart_data']
+
+        if has_chart:
+            # Create chart slide using blank layout for better control
+            slide_layout = prs.slide_layouts[6]  # Blank layout
+        else:
+            # Regular content slide
+            slide_layout = prs.slide_layouts[1]  # Title and Content layout
+
         slide = prs.slides.add_slide(slide_layout)
-        
+
         # Add background design
         self._add_background_design(slide, visual_elements, color_scheme)
-        
+
         # Get visual styling elements
-        font_family = visual_elements.get('font_family', 'Segoe UI')  # Better default font
+        font_family = visual_elements.get('font_family', 'Segoe UI')
         font_styles = visual_elements.get('font_styles', {'bold': True, 'italic': False})
-        
-        # Style title with larger font size and center alignment
-        title = slide.shapes.title
-        if title and hasattr(title, 'text_frame'):
-            title.text = slide_data.get('title', 'Slide Title')
-            title.text_frame.paragraphs[0].font.size = Pt(28)
-            title.text_frame.paragraphs[0].font.name = font_family
-            title.text_frame.paragraphs[0].font.bold = font_styles.get('bold', True)
-            title.text_frame.paragraphs[0].font.italic = font_styles.get('italic', False)
-            title.text_frame.paragraphs[0].font.color.rgb = RGBColor.from_string(
+
+        # Add title
+        if has_chart:
+            # Manually add title for chart slides
+            title_box = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12.33), Inches(0.8))
+            title_frame = title_box.text_frame
+            title_frame.text = slide_data.get('title', 'Chart Slide')
+            title_para = title_frame.paragraphs[0]
+            title_para.font.size = Pt(28)
+            title_para.font.name = font_family
+            title_para.font.bold = True
+            title_para.font.color.rgb = RGBColor.from_string(
                 color_scheme.get('primary', '#2C3E50').lstrip('#')
             )
-            title.text_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
-        
-        # Add content with better formatting and centering
+            title_para.alignment = PP_ALIGN.LEFT
+        else:
+            # Style title with larger font size
+            title = slide.shapes.title
+            if title and hasattr(title, 'text_frame'):
+                title.text = slide_data.get('title', 'Slide Title')
+                title.text_frame.paragraphs[0].font.size = Pt(28)
+                title.text_frame.paragraphs[0].font.name = font_family
+                title.text_frame.paragraphs[0].font.bold = font_styles.get('bold', True)
+                title.text_frame.paragraphs[0].font.italic = font_styles.get('italic', False)
+                title.text_frame.paragraphs[0].font.color.rgb = RGBColor.from_string(
+                    color_scheme.get('primary', '#2C3E50').lstrip('#')
+                )
+                title.text_frame.paragraphs[0].alignment = PP_ALIGN.LEFT  # Professional left alignment
+
+        # If slide has chart data, add the chart
+        if has_chart:
+            self._add_chart_to_slide(slide, slide_data, color_scheme)
+            # Also add bullet points if present (in left column)
+            content_items = slide_data.get('content', [])
+            if content_items:
+                self._add_text_box_with_bullets(slide, content_items, Inches(0.5), Inches(1.5),
+                                                Inches(5.5), Inches(5), font_family, color_scheme)
+            return  # Chart slide is complete
+
+        # Add content with better formatting
         content_placeholder = slide.placeholders[1] if len(slide.placeholders) > 1 else None
         if content_placeholder and hasattr(content_placeholder, 'text_frame'):
             text_frame = content_placeholder.text_frame
@@ -981,7 +1031,7 @@ class AdvancedPPTGenerator(BaseDocumentGenerator):
                 )
                 p.space_before = Pt(12)  # Add spacing before each item
                 p.space_after = Pt(12)   # Add spacing after each item
-                p.alignment = PP_ALIGN.CENTER  # Center align text
+                p.alignment = PP_ALIGN.LEFT  # Professional left alignment
                 p.level = 0  # No indentation
 
     def _create_conclusion_slide(self, prs, conclusion: Dict[str, Any],
@@ -1008,7 +1058,7 @@ class AdvancedPPTGenerator(BaseDocumentGenerator):
             title.text_frame.paragraphs[0].font.color.rgb = RGBColor.from_string(
                 color_scheme.get('primary', '#2C3E50').lstrip('#')
             )
-            title.text_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
+            title.text_frame.paragraphs[0].alignment = PP_ALIGN.LEFT  # Professional left alignment
         
         # Add content with better formatting and centering
         content_placeholder = slide.placeholders[1] if len(slide.placeholders) > 1 else None
@@ -1038,7 +1088,7 @@ class AdvancedPPTGenerator(BaseDocumentGenerator):
                 )
                 p.space_before = Pt(12)  # Add spacing before each item
                 p.space_after = Pt(12)   # Add spacing after each item
-                p.alignment = PP_ALIGN.CENTER  # Center align text
+                p.alignment = PP_ALIGN.LEFT  # Professional left alignment
                 p.level = 0  # No indentation
     
     def _add_background_design(self, slide, visual_elements: Dict[str, Any], color_scheme: Dict[str, str]):
@@ -1150,6 +1200,79 @@ class AdvancedPPTGenerator(BaseDocumentGenerator):
             except Exception:
                 # If shape creation fails, skip it
                 pass
+
+    def _add_chart_to_slide(self, slide, slide_data: Dict[str, Any], color_scheme: Dict[str, str]):
+        """Add a chart to the slide based on chart_data in slide_data"""
+        try:
+            from pptx.chart.data import ChartData
+            from pptx.enum.chart import XL_CHART_TYPE
+            from pptx.util import Inches
+
+            chart_info = slide_data.get('chart_data', {})
+            chart_type = chart_info.get('type', 'bar').lower()
+            labels = chart_info.get('labels', [])
+            values = chart_info.get('values', [])
+
+            if not labels or not values or len(labels) != len(values):
+                logger.warning("Invalid chart data, skipping chart")
+                return
+
+            # Create chart data
+            chart_data = ChartData()
+            chart_data.categories = labels
+
+            # Add series
+            series_name = slide_data.get('title', 'Data')
+            chart_data.add_series(series_name, values)
+
+            # Determine chart type
+            chart_type_map = {
+                'bar': XL_CHART_TYPE.BAR_CLUSTERED,
+                'column': XL_CHART_TYPE.COLUMN_CLUSTERED,
+                'pie': XL_CHART_TYPE.PIE,
+                'line': XL_CHART_TYPE.LINE,
+            }
+
+            pptx_chart_type = chart_type_map.get(chart_type, XL_CHART_TYPE.COLUMN_CLUSTERED)
+
+            # Add chart to slide (right side)
+            x, y, cx, cy = Inches(6.5), Inches(1.5), Inches(6), Inches(5)
+            chart = slide.shapes.add_chart(
+                pptx_chart_type, x, y, cx, cy, chart_data
+            ).chart
+
+            # Style the chart
+            chart.has_legend = True
+            chart.legend.position = 2  # Bottom
+            chart.legend.font.size = Pt(10)
+
+            logger.info(f"Added {chart_type} chart with {len(values)} data points")
+
+        except Exception as e:
+            logger.warning(f"Error adding chart to slide: {e}")
+
+    def _add_text_box_with_bullets(self, slide, content_items: list, left, top, width, height,
+                                   font_family: str, color_scheme: Dict[str, str]):
+        """Add a text box with bullet points to the slide"""
+        try:
+            text_box = slide.shapes.add_textbox(left, top, width, height)
+            text_frame = text_box.text_frame
+            text_frame.word_wrap = True
+
+            for i, item in enumerate(content_items):
+                p = text_frame.paragraphs[0] if i == 0 else text_frame.add_paragraph()
+                p.text = f"• {item}"
+                p.font.size = Pt(16)
+                p.font.name = font_family
+                p.font.color.rgb = RGBColor.from_string(
+                    color_scheme.get('text', '#2C3E50').lstrip('#')
+                )
+                p.space_before = Pt(8)
+                p.space_after = Pt(8)
+                p.alignment = PP_ALIGN.LEFT
+
+        except Exception as e:
+            logger.warning(f"Error adding text box with bullets: {e}")
 
 
 

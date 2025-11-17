@@ -15,6 +15,8 @@ from modules.video_handler import VideoHandler
 from modules.pic_handler import PhotoHandler
 from modules.doc_handler import DocumentHandler
 from modules.command_handlers import CommandHandlers
+# Phase 2: RAG system
+from modules.rag import VectorStoreManager, RAGChain
 
 # ─── 📝 Logging ────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -36,11 +38,26 @@ memory_manager = MemoryManager(
 # ─── 📄 Document Generator ─────────────────────────────────────────────────
 doc_generator = DocumentGenerator(model, memory_manager)
 
+# ─── 🔍 RAG System (Phase 2) ─────────────────────────────────────────────────
+try:
+    vector_store = VectorStoreManager()
+    rag_chain = RAGChain(model, vector_store)
+    logger.info("✅ RAG system initialized successfully")
+except Exception as e:
+    logger.warning(f"⚠️ RAG system initialization failed: {e}. Continuing without RAG...")
+    vector_store = None
+    rag_chain = None
+
 # ─── 🎛️ Media Handlers ─────────────────────────────────────────────────
 audio_handler = AudioHandler(model, memory_manager)
 video_handler = VideoHandler(model, memory_manager)
 photo_handler = PhotoHandler(model, memory_manager)
 doc_handler = DocumentHandler(model, memory_manager)
+
+# Integrate RAG with document handler (Phase 2: Semantic Search)
+if rag_chain:
+    doc_handler.set_rag(rag_chain)
+    logger.info("📚 RAG system integrated with DocumentHandler for semantic document search")
 
 # ─── 🔍 Web Search Integration ─────────────────────────────────────────────────
 async def search_web(query: str) -> str:
@@ -123,6 +140,13 @@ async def post_init(application):
     # Start periodic cleanup task (every 6 hours)
     asyncio.create_task(periodic_cleanup(application))
     logger.info("🧹 Periodic cleanup task started (every 6 hours)")
+
+    # Start handler cleanup tasks (hourly cleanup of completed tasks)
+    audio_handler._cleanup_task = asyncio.create_task(audio_handler._cleanup_completed_tasks())
+    video_handler._cleanup_task = asyncio.create_task(video_handler._cleanup_completed_tasks())
+    photo_handler._cleanup_task = asyncio.create_task(photo_handler._cleanup_completed_tasks())
+    doc_handler._cleanup_task = asyncio.create_task(doc_handler._cleanup_completed_tasks())
+    logger.info("🧹 Handler cleanup tasks started (hourly)")
 
 # ─── 🚫 Bot Blocking Detection ─────────────────────────────────────────────────
 async def on_my_chat_member(update, context):
@@ -383,7 +407,24 @@ def main():
     
     # Register chat member handler for blocking detection
     app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
-    
+
+    # Add global error handler - Phase 1 improvement
+    async def error_handler(update, context):
+        """Global error handler for uncaught exceptions"""
+        logger.error(f"Exception while handling update: {context.error}", exc_info=context.error)
+
+        # Notify user if possible
+        try:
+            if update and update.effective_message:
+                await update.effective_message.reply_text(
+                    "⚠️ Xatolik yuz berdi. Qaytadan urinib ko'ring.\n\n"
+                    "Muammo davom etsa, /help buyrug'i orqali yordam oling."
+                )
+        except Exception as e:
+            logger.error(f"Error sending error message to user: {e}")
+
+    app.add_error_handler(error_handler)
+
     logger.info("🤖 AQLJON SmartBot is now LIVE and listening!")
     logger.info("🎬 Video processing: Non-blocking with timeouts enabled")
     logger.info("🚀 Bot optimized for concurrent users")

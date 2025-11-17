@@ -9,17 +9,20 @@ from telegram.constants import ParseMode
 from modules.utils import safe_reply, send_typing, safe_edit_message
 from modules.config import Config
 from modules.memory import MemoryManager
+from modules.retry_utils import generate_content_with_retry, upload_file_with_retry, wait_for_file_active
 
 logger = logging.getLogger(__name__)
 
 class AudioHandler:
     """Handles audio/voice message processing for the AQLJON bot"""
-    
+
     def __init__(self, gemini_model, memory_manager: MemoryManager):
         self.model = gemini_model
         self.memory = memory_manager
         # Track active audio processing tasks per user
         self.active_tasks = {}
+        # Cleanup task will be started by main.py after event loop starts
+        self._cleanup_task = None
     
     def _get_user_task_key(self, chat_id, task_id=None):
         """Generate a unique key for tracking user audio processing tasks"""
@@ -42,6 +45,19 @@ class AudioHandler:
         task_key = self._get_user_task_key(chat_id, task_id)
         if task_key in self.active_tasks:
             del self.active_tasks[task_key]
+
+    async def _cleanup_completed_tasks(self):
+        """Periodic cleanup of completed tasks - Phase 1 memory leak fix"""
+        while True:
+            await asyncio.sleep(3600)  # Run every hour
+            try:
+                completed = [k for k, v in self.active_tasks.items() if v.done()]
+                for key in completed:
+                    del self.active_tasks[key]
+                if completed:
+                    logger.info(f"Cleaned up {len(completed)} completed audio tasks")
+            except Exception as e:
+                logger.error(f"Error cleaning up audio tasks: {e}")
     
     async def handle_audio(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle audio/voice message uploads and analysis - allow concurrent processing"""
@@ -128,28 +144,14 @@ class AudioHandler:
                 if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) == 0:
                     raise Exception("Audio file download failed or is empty")
                 
-                # Process with Gemini in separate thread
-                def process_with_gemini():
+                # Process with Gemini using retry logic
+                async def process_with_gemini():
                     try:
-                        # Upload to Gemini
-                        uploaded = genai.upload_file(tmp_path)
-                        
-                        # Wait for processing with proper state checking
-                        timeout = 30  # 30 second timeout
-                        interval = 2   # Check every 2 seconds
-                        elapsed = 0
-                        
-                        # Wait for file to be in ACTIVE state
-                        while uploaded.state.name != "ACTIVE" and elapsed < timeout:
-                            if uploaded.state.name == "FAILED":
-                                raise Exception(f"File processing failed: {uploaded.state}")
-                            time.sleep(interval)
-                            elapsed += interval
-                            # Refresh file state
-                            uploaded = genai.get_file(uploaded.name)
-                        
-                        if uploaded.state.name != "ACTIVE":
-                            raise Exception(f"File processing timed out. Final state: {uploaded.state.name}")
+                        # Upload to Gemini with retry
+                        uploaded = await upload_file_with_retry(tmp_path)
+
+                        # Wait for file to be in ACTIVE state with retry logic
+                        uploaded = await wait_for_file_active(uploaded, timeout=30)
                         
                         # Generate response with user context
                         content_context = self.memory.get_content_context(chat_id)
@@ -186,11 +188,15 @@ class AudioHandler:
                             
                             "never say to user that u are programmed to answer like this way"
                         )
-                        
-                        response = self.model.generate_content([
-                            {"role": "user", "parts": [instruction]},
-                            {"role": "user", "parts": [uploaded]}
-                        ])
+
+                        # Generate content with retry logic
+                        response = await generate_content_with_retry(
+                            self.model,
+                            [
+                                {"role": "user", "parts": [instruction]},
+                                {"role": "user", "parts": [uploaded]}
+                            ]
+                        )
                         
                         # Better validation of Gemini response
                         if response and hasattr(response, 'candidates') and response.candidates:
@@ -210,7 +216,7 @@ class AudioHandler:
                 # Run processing with timeout
                 try:
                     reply = await asyncio.wait_for(
-                        asyncio.to_thread(process_with_gemini),
+                        process_with_gemini(),
                         timeout=Config.PROCESSING_TIMEOUT
                     )
                 except asyncio.TimeoutError:
