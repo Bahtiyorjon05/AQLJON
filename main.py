@@ -15,6 +15,11 @@ from modules.pic_handler import PhotoHandler
 from modules.doc_handler import DocumentHandler
 from modules.command_handlers import CommandHandlers
 
+# ─── 📝 Logging ────────────────────────────────────────────────
+# IMPORTANT: Setup logging BEFORE importing RAG (which may fail)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
 # Phase 2: RAG system (optional - only if dependencies installed)
 try:
     from modules.rag import VectorStoreManager, RAGChain
@@ -24,10 +29,6 @@ except ImportError:
     RAG_AVAILABLE = False
     VectorStoreManager = None
     RAGChain = None
-
-# ─── 📝 Logging ────────────────────────────────────────────────
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
 
 # ─── 🤖 Gemini Setup ───────────────────────────────────────────
 Config.validate()
