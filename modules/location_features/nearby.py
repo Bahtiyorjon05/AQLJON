@@ -1,11 +1,11 @@
 import logging
-import aiohttp
-import math
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Location
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 from modules.utils import safe_reply
+from modules.retry_utils import http_post_with_retry
+from modules.location_features.utils import calculate_distance
 
 logger = logging.getLogger(__name__)
 
@@ -244,22 +244,24 @@ class NearbyHandler:
                 out center;
                 """
                 
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(self.OVERPASS_URL, data={"data": overpass_query}) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            elements = data.get("elements", [])
-                            
-                            # If we found places or this is the largest radius, stop searching
-                            if elements or radius == search_radii[-1]:
-                                used_radius = radius
-                                break
-                            # If no places found and this isn't the largest radius, try a larger radius
-                            else:
-                                continue
-                        else:
-                            # Try next radius on API error
-                            continue
+                data = await http_post_with_retry(
+                    self.OVERPASS_URL,
+                    data={"data": overpass_query},
+                    timeout=30
+                )
+                if data:
+                    elements = data.get("elements", [])
+
+                    # If we found places or this is the largest radius, stop searching
+                    if elements or radius == search_radii[-1]:
+                        used_radius = radius
+                        break
+                    # If no places found and this isn't the largest radius, try a larger radius
+                    else:
+                        continue
+                else:
+                    # Try next radius on API error
+                    continue
             
             if elements:
                 # Process elements
@@ -730,23 +732,5 @@ class NearbyHandler:
         )
     
     def _calculate_distance(self, lat1, lon1, lat2, lon2):
-        """Calculate the distance between two points using the haversine formula"""
-        R = 6371  # Earth radius in kilometers
-        
-        # Convert degrees to radians
-        lat1_rad = math.radians(lat1)
-        lon1_rad = math.radians(lon1)
-        lat2_rad = math.radians(lat2)
-        lon2_rad = math.radians(lon2)
-        
-        # Differences in coordinates
-        dlat = lat2_rad - lat1_rad
-        dlon = lon2_rad - lon1_rad
-        
-        # Haversine formula
-        a = math.sin(dlat/2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon/2)**2
-        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
-        
-        # Distance in kilometers
-        distance = R * c
-        return distance
+        """Calculate the distance between two points - delegates to shared utility"""
+        return calculate_distance(lat1, lon1, lat2, lon2)

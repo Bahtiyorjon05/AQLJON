@@ -10,6 +10,7 @@ from telegram.constants import ParseMode
 from modules.utils import safe_reply, send_typing, safe_edit_message
 from modules.config import Config
 from modules.memory import MemoryManager
+from modules.retry_utils import generate_content_with_retry, upload_file_with_retry, wait_for_file_active
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,8 @@ class VideoHandler:
         self.memory = memory_manager
         # Track active video processing tasks per user
         self.active_tasks = {}
+        # Cleanup task will be started by main.py after event loop starts
+        self._cleanup_task = None
     
     def _get_user_task_key(self, chat_id, task_id=None):
         """Generate a unique key for tracking user video processing tasks"""
@@ -43,7 +46,29 @@ class VideoHandler:
         task_key = self._get_user_task_key(chat_id, task_id)
         if task_key in self.active_tasks:
             del self.active_tasks[task_key]
-    
+
+    async def _cleanup_completed_tasks(self):
+        """Periodically clean up completed tasks to prevent memory leaks"""
+        while True:
+            try:
+                await asyncio.sleep(3600)  # Run every hour
+
+                # Find all completed tasks
+                completed_keys = [
+                    key for key, task in self.active_tasks.items()
+                    if task.done()
+                ]
+
+                # Remove completed tasks
+                for key in completed_keys:
+                    del self.active_tasks[key]
+
+                if completed_keys:
+                    logger.info(f"🧹 Cleaned up {len(completed_keys)} completed video tasks. Active tasks: {len(self.active_tasks)}")
+
+            except Exception as e:
+                logger.error(f"Error in video task cleanup: {e}")
+
     async def handle_video(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle video uploads and analysis - allow concurrent processing"""
         if not update or not update.message or not update.message.video:
@@ -111,28 +136,14 @@ class VideoHandler:
                 if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) == 0:
                     raise Exception("Video file download failed or is empty")
                 
-                # Process with Gemini
-                def process_with_gemini():
+                # Process with Gemini using retry logic
+                async def process_with_gemini():
                     try:
-                        # Upload to Gemini
-                        uploaded = genai.upload_file(tmp_path)
-                        
-                        # Wait for processing with proper state checking
-                        timeout = 30  # 30 second timeout
-                        interval = 2   # Check every 2 seconds
-                        elapsed = 0
-                        
-                        # Wait for file to be in ACTIVE state
-                        while uploaded.state.name != "ACTIVE" and elapsed < timeout:
-                            if uploaded.state.name == "FAILED":
-                                raise Exception(f"File processing failed: {uploaded.state}")
-                            time.sleep(interval)
-                            elapsed += interval
-                            # Refresh file state
-                            uploaded = genai.get_file(uploaded.name)
-                        
-                        if uploaded.state.name != "ACTIVE":
-                            raise Exception(f"File processing timed out. Final state: {uploaded.state.name}")
+                        # Upload to Gemini with retry
+                        uploaded = await upload_file_with_retry(tmp_path)
+
+                        # Wait for file to be in ACTIVE state with retry logic
+                        uploaded = await wait_for_file_active(uploaded, timeout=30)
                         
                         # Generate response with user context
                         content_context = self.memory.get_content_context(chat_id)
@@ -167,11 +178,15 @@ class VideoHandler:
                             "Here's the context of previous conversations and shared content:\n" + content_context + "\n\n"
                             "never say that u are AI and that u are ordered and programmed to answer like this way. be a Muslim friend to user"
                         )
-                        
-                        response = self.model.generate_content([
-                            {"role": "user", "parts": [instruction]},
-                            {"role": "user", "parts": [uploaded]}
-                        ])
+
+                        # Generate content with retry logic
+                        response = await generate_content_with_retry(
+                            self.model,
+                            [
+                                {"role": "user", "parts": [instruction]},
+                                {"role": "user", "parts": [uploaded]}
+                            ]
+                        )
                         
                         # Better validation of Gemini response
                         if response and hasattr(response, 'candidates') and response.candidates:
@@ -188,7 +203,7 @@ class VideoHandler:
                 # Run processing with timeout
                 try:
                     reply = await asyncio.wait_for(
-                        asyncio.to_thread(process_with_gemini),
+                        process_with_gemini(),
                         timeout=Config.PROCESSING_TIMEOUT
                     )
                 except asyncio.TimeoutError:

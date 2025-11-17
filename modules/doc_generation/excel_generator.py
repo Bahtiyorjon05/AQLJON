@@ -10,6 +10,7 @@ from telegram.constants import ParseMode
 from modules.doc_generation.base_generator import BaseDocumentGenerator
 from modules.config import Config
 from modules.utils import safe_reply, send_typing
+from modules.retry_utils import generate_content_with_retry
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, Color
 from openpyxl.chart import BarChart, LineChart, PieChart, Reference, ScatterChart
@@ -69,19 +70,42 @@ class ExcelGenerator(BaseDocumentGenerator):
             # Generate filename using centralized method
             filename = await self._generate_filename(cleaned_topic, "Excel")
             
-            # Generate content with Gemini using flexible prompt structure - all content in user's language
+            # Generate content with Gemini using enhanced prompt for data-driven, visual Excel content
             # Gemini will automatically detect the language from the user's input
             prompt = f"""
             You are AQLJON, an intelligent assistant who creates exceptional, professionally formatted Excel spreadsheets.
             Create a professional Excel spreadsheet about '{cleaned_topic}' in the SAME LANGUAGE as the user's input.
-            
+
             {"Use the following context from previous documents the user shared to inform your content:" + content_context if content_context else ""}
-            
-            Analyze the topic and create a well-structured, data-rich Excel file that:
-            1. Provides comprehensive coverage based on the specific topic
-            2. Uses appropriate data structure for the topic type
-            3. Includes realistic sample data with proper formatting
-            4. Incorporates advanced Excel features like:
+
+            CRITICAL: Create DATA-RICH content optimized for charts, sparklines, and visualization:
+
+            1. DATA REQUIREMENTS:
+               - MINIMUM 15-25 rows of realistic data
+               - Include numeric columns for calculations (prices, percentages, counts, ratings)
+               - Add date/time columns for trends
+               - Include category columns for grouping
+               - Ensure data variety for interesting charts
+
+            2. COLUMN STRUCTURE (suggest 6-8 columns):
+               - ID/Number column
+               - Name/Item column
+               - 2-3 Category columns
+               - 2-3 Numeric columns (for calculations and charts)
+               - 1 Date/Progress column (for trends)
+
+            3. MAKE DATA CHART-FRIENDLY:
+               - Include values that show clear trends
+               - Add comparative data across categories
+               - Include percentages (0-100)
+               - Add rankings or scores (1-10 scale)
+               - Time-based data for line charts
+
+            4. Analyze the topic and create well-structured, data-rich Excel that:
+               - Provides comprehensive coverage based on specific topic
+               - Uses appropriate data structure for the topic type
+               - Includes realistic sample data with proper formatting
+               - Incorporates advanced Excel features like:
                - Professional styling and formatting with vibrant colors
                - Multiple sheets with specific purposes:
                  * Data sheet: Main data table with comprehensive information
@@ -132,15 +156,19 @@ class ExcelGenerator(BaseDocumentGenerator):
             20. For the Insights sheet, provide 3-5 actionable insights or recommendations based on the data
             """
             
-            # Generate content with timeout to prevent blocking
+            # Generate content with timeout to prevent blocking and retry logic
             try:
-                response = await asyncio.wait_for(
-                    asyncio.to_thread(lambda: self.model.generate_content(prompt)),
+                response = await generate_content_with_retry(
+                    self.model,
+                    prompt,
                     timeout=Config.PROCESSING_TIMEOUT * 2  # Double timeout for document generation
                 )
                 csv_content = response.text if response and response.text else f"Error generating content for {cleaned_topic}."
             except asyncio.TimeoutError:
                 logger.warning("Excel content generation timed out, using fallback content")
+                csv_content = "Topic,Value\n" + cleaned_topic + ",Data\n"
+            except Exception as e:
+                logger.error(f"Excel content generation failed after retries: {e}")
                 csv_content = "Topic,Value\n" + cleaned_topic + ",Data\n"
             
             # Create Excel in temporary file
@@ -587,10 +615,69 @@ class ExcelGenerator(BaseDocumentGenerator):
                     cancelled_rule.dxf = pending_dxf
                     data_sheet.conditional_formatting.add(f"{status_column}2:{status_column}{max_row}", cancelled_rule)
                 
-                # Add sparklines for numeric data
-                # This would be a great addition but requires more complex implementation
-                # For now, we'll focus on what we have
-                
+                # Add sparklines for numeric data - now implemented!
+                try:
+                    from openpyxl.worksheet.sparkline import SparklineGroup
+
+                    # Find numeric columns for sparklines (skip ID column)
+                    numeric_cols = []
+                    for col in range(2, min(max_col + 1, 8)):  # Check columns 2-7
+                        try:
+                            # Check if column contains numeric data
+                            test_value = data_sheet.cell(row=2, column=col).value
+                            if test_value is not None:
+                                float(test_value)
+                                numeric_cols.append(col)
+                        except (ValueError, TypeError):
+                            pass
+
+                    # Add sparklines for each row showing trend across numeric columns
+                    if len(numeric_cols) >= 3 and max_row > 2:  # Need at least 3 numeric columns
+                        # Add sparkline column header
+                        sparkline_col = max_col + 1
+                        sparkline_header = data_sheet.cell(row=1, column=sparkline_col)
+                        sparkline_header.value = "Trend"
+                        sparkline_header.font = Font(bold=True, italic=True, color="FFFFFF", size=14)
+                        sparkline_header.fill = PatternFill(start_color="9B59B6", end_color="9B59B6", fill_type="solid")
+                        sparkline_header.alignment = Alignment(horizontal="center", vertical="center")
+
+                        # Add sparklines for each data row
+                        for row in range(2, min(max_row + 1, 27)):  # Limit to prevent too many sparklines
+                            sparkline_group = SparklineGroup()
+                            sparkline_group.type = "line"  # Line sparkline
+                            sparkline_group.lineWeight = 1.25  # Slightly thicker line
+
+                            # Create sparkline range from numeric columns
+                            start_col_letter = get_column_letter(numeric_cols[0])
+                            end_col_letter = get_column_letter(numeric_cols[-1])
+                            sparkline_range = f"{start_col_letter}{row}:{end_col_letter}{row}"
+
+                            # Add the sparkline to the group
+                            sparkline_group.add(sparkline_range)
+
+                            # Place sparkline in the sparkline column
+                            sparkline_cell = data_sheet.cell(row=row, column=sparkline_col)
+                            sparkline_cell.sparkline = sparkline_group
+
+                            # Style the sparkline cell
+                            sparkline_cell.fill = PatternFill(start_color="F3E5F5", end_color="F3E5F5", fill_type="solid")
+                            sparkline_cell.border = Border(
+                                left=Side(style='thin', color='9B59B6'),
+                                right=Side(style='thin', color='9B59B6'),
+                                top=Side(style='thin', color='9B59B6'),
+                                bottom=Side(style='thin', color='9B59B6')
+                            )
+
+                        # Adjust column width for sparklines
+                        data_sheet.column_dimensions[get_column_letter(sparkline_col)].width = 15
+
+                        logger.info(f"Added sparklines for {max_row - 1} rows across {len(numeric_cols)} numeric columns")
+
+                except ImportError:
+                    logger.warning("Sparkline support not available in this version of openpyxl")
+                except Exception as e:
+                    logger.warning(f"Error adding sparklines: {e}")
+
         except Exception as e:
             logger.warning(f"Error adding advanced Excel features: {e}")
 

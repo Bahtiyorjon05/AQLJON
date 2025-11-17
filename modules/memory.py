@@ -30,6 +30,12 @@ class MemoryManager:
         self.user_info = {}
         self.blocked_users = set()
 
+        # Batch write optimization - Phase 1 improvement
+        self._pending_writes = set()  # Track users needing save
+        self._last_batch_save = time.time()
+        self.BATCH_SAVE_INTERVAL = 300  # 5 minutes
+        self.BATCH_SAVE_THRESHOLD = 50  # Save when 50 users pending
+
         # Load persistent data from Firestore
         self._load_from_firestore()
 
@@ -42,14 +48,14 @@ class MemoryManager:
             # Check if already initialized
             if firebase_admin._apps:
                 self.db = firestore.client()
-                print("✅ Firebase already initialized, reusing connection")
+                print("[OK] Firebase already initialized, reusing connection")
                 return
 
             # Get credentials from environment variable
             firebase_creds_json = os.getenv("FIREBASE_CREDENTIALS")
 
             if not firebase_creds_json:
-                print("⚠️  WARNING: FIREBASE_CREDENTIALS not found. Running in local-only mode (data will be lost on restart).")
+                print("[WARNING] FIREBASE_CREDENTIALS not found. Running in local-only mode (data will be lost on restart).")
                 self.db = None
                 return
 
@@ -61,17 +67,17 @@ class MemoryManager:
             firebase_admin.initialize_app(cred)
             self.db = firestore.client()
 
-            print("✅ Firebase Firestore connected successfully!")
+            print("[OK] Firebase Firestore connected successfully!")
 
         except Exception as e:
-            print(f"❌ Firebase initialization failed: {e}")
-            print("⚠️  Running in local-only mode (data will be lost on restart)")
+            print(f"[ERROR] Firebase initialization failed: {e}")
+            print("[WARNING] Running in local-only mode (data will be lost on restart)")
             self.db = None
 
     def _load_from_firestore(self):
         """Load all user data from Firestore"""
         if not self.db:
-            print("⚠️  Firestore not available, skipping load")
+            print("[WARNING] Firestore not available, skipping load")
             return
 
         try:
@@ -98,10 +104,10 @@ class MemoryManager:
 
                 loaded_count += 1
 
-            print(f"✅ Loaded {loaded_count} users from Firestore")
+            print(f"[OK] Loaded {loaded_count} users from Firestore")
 
         except Exception as e:
-            print(f"❌ Error loading from Firestore: {e}")
+            print(f"[ERROR] Error loading from Firestore: {e}")
 
     def _save_to_firestore(self, chat_id: str):
         """Save a single user's data to Firestore"""
@@ -129,8 +135,59 @@ class MemoryManager:
             return True
 
         except Exception as e:
-            print(f"❌ Error saving {chat_id} to Firestore: {e}")
+            print(f"[ERROR] Error saving {chat_id} to Firestore: {e}")
             return False
+
+    def _batch_save_pending(self):
+        """Batch save all pending user data to Firestore - Phase 1 optimization"""
+        if not self.db or not self._pending_writes:
+            return
+
+        try:
+            # Use Firestore batch writes for efficiency
+            batch = self.db.batch()
+            saved_count = 0
+
+            for chat_id in list(self._pending_writes):
+                try:
+                    user_ref = self.db.collection('users').document(chat_id)
+
+                    # Prepare data
+                    data = {}
+
+                    if chat_id in self.user_stats:
+                        data['stats'] = self.user_stats[chat_id]
+
+                    if chat_id in self.user_info:
+                        data['info'] = self.user_info[chat_id]
+
+                    data['blocked'] = chat_id in self.blocked_users
+                    data['last_updated'] = firestore.SERVER_TIMESTAMP
+
+                    # Add to batch (max 500 operations per batch)
+                    batch.set(user_ref, data, merge=True)
+                    saved_count += 1
+
+                    # Commit batch when reaching 500 operations (Firestore limit)
+                    if saved_count % 500 == 0:
+                        batch.commit()
+                        batch = self.db.batch()
+
+                except Exception as e:
+                    print(f"Error preparing batch for {chat_id}: {e}")
+
+            # Commit remaining operations
+            if saved_count % 500 != 0:
+                batch.commit()
+
+            print(f"[OK] Batch saved {saved_count} users to Firestore")
+
+            # Clear pending writes and update timestamp
+            self._pending_writes.clear()
+            self._last_batch_save = time.time()
+
+        except Exception as e:
+            print(f"[ERROR] Error in batch save: {e}")
 
     def save_persistent_data(self):
         """Save all persistent data to Firestore"""
@@ -175,11 +232,11 @@ class MemoryManager:
             if save_count % 450 != 0:
                 batch.commit()
 
-            print(f"✅ Saved {save_count} users to Firestore")
+            print(f"[OK] Saved {save_count} users to Firestore")
             return True
 
         except Exception as e:
-            print(f"❌ Error saving to Firestore: {e}")
+            print(f"[ERROR] Error saving to Firestore: {e}")
             return False
 
     # ─── 📊 User Statistics Tracking ─────────────────────────────────────────────────
@@ -272,9 +329,13 @@ class MemoryManager:
             else:
                 self.user_daily_activity[chat_id][today][activity_type] = 1
 
-            # Save to Firestore every 10th activity to reduce writes (stay within free tier)
-            if self.user_stats[chat_id].get(activity_type, 0) % 10 == 0:
-                self._save_to_firestore(chat_id)
+            # Optimized batch write - mark user for pending save
+            self._pending_writes.add(chat_id)
+
+            # Batch save every 5 minutes OR when 50 users are pending
+            if (time.time() - self._last_batch_save > self.BATCH_SAVE_INTERVAL or
+                len(self._pending_writes) >= self.BATCH_SAVE_THRESHOLD):
+                self._batch_save_pending()
 
         except Exception as e:
             # Log error but don't crash - statistics are not critical

@@ -1,11 +1,11 @@
 import logging
-import aiohttp
-import math
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 from modules.utils import safe_reply, safe_edit_message
+from modules.retry_utils import http_get_with_retry
+from modules.location_features.utils import calculate_distance, validate_coordinates
 
 logger = logging.getLogger(__name__)
 
@@ -119,12 +119,9 @@ class PrayerTimesHandler:
                 "school": 1   # Hanafi school (0 = Shafi, 1 = Hanafi)
             }
             
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if data.get("code") == 200:
-                            best_result = data
+            data = await http_get_with_retry(url, params=params, timeout=25)
+            if data and data.get("code") == 200:
+                best_result = data
             
             # If primary method failed, try fallback methods
             if not best_result:
@@ -141,13 +138,10 @@ class PrayerTimesHandler:
                         "school": 1  # Still use Hanafi school
                     }
                     
-                    async with aiohttp.ClientSession() as fallback_session:
-                        async with fallback_session.get(url, params=fallback_params) as fallback_response:
-                            if fallback_response.status == 200:
-                                fallback_data = await fallback_response.json()
-                                if fallback_data.get("code") == 200:
-                                    best_result = fallback_data
-                                    break
+                    fallback_data = await http_get_with_retry(url, params=fallback_params, timeout=25)
+                    if fallback_data and fallback_data.get("code") == 200:
+                        best_result = fallback_data
+                        break
             
             if best_result:
                 timings = best_result["data"]["timings"]
@@ -246,29 +240,27 @@ class PrayerTimesHandler:
                 "User-Agent": "AQLJON-bot/1.0 (https://t.me/AQLJON_bot)"
             }
             
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, headers=headers) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        address = data.get("address", {})
-                        
-                        city = (address.get("city") or 
-                               address.get("town") or 
-                               address.get("village") or 
-                               "Noma'lum shahar")
-                        
-                        country = address.get("country", "Noma'lum mamlakat")
-                        state = address.get("state", "")
-                        display_name = data.get("display_name", "Noma'lum joylashuv")
-                        
-                        return {
-                            "city": city,
-                            "country": country,
-                            "state": state,
-                            "display_name": display_name,
-                            "latitude": latitude,
-                            "longitude": longitude
-                        }
+            data = await http_get_with_retry(url, params=params, headers=headers, timeout=15)
+            if data:
+                address = data.get("address", {})
+
+                city = (address.get("city") or
+                       address.get("town") or
+                       address.get("village") or
+                       "Noma'lum shahar")
+
+                country = address.get("country", "Noma'lum mamlakat")
+                state = address.get("state", "")
+                display_name = data.get("display_name", "Noma'lum joylashuv")
+
+                return {
+                    "city": city,
+                    "country": country,
+                    "state": state,
+                    "display_name": display_name,
+                    "latitude": latitude,
+                    "longitude": longitude
+                }
         except Exception as e:
             logger.error(f"Nominatimdan joylashuv ma'lumotlarini olishda xatolik: {e}")
             return {
@@ -295,55 +287,39 @@ class PrayerTimesHandler:
                 "User-Agent": "AQLJON-bot/1.0 (https://t.me/AQLJON_bot)"
             }
             
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, headers=headers) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if data:
-                            # Get the most relevant result
-                            location = data[0]
-                            lat = float(location["lat"])
-                            lon = float(location["lon"])
-                            
-                            address = location.get("address", {})
-                            city = (address.get("city") or 
-                                   address.get("town") or 
-                                   address.get("village") or 
-                                   location.get("display_name", city_name))
-                            
-                            country = address.get("country", "Noma'lum mamlakat")
-                            state = address.get("state", "")
-                            
-                            return {
-                                "city": city,
-                                "country": country,
-                                "state": state,
-                                "display_name": location.get("display_name", city_name),
-                                "latitude": lat,
-                                "longitude": lon
-                            }
+            data = await http_get_with_retry(url, params=params, headers=headers, timeout=15)
+            if data and len(data) > 0:
+                # Get the most relevant result
+                location = data[0]
+                lat = float(location["lat"])
+                lon = float(location["lon"])
+
+                # Validate coordinates
+                if not validate_coordinates(lat, lon):
+                    logger.error(f"Invalid coordinates from Nominatim: {lat}, {lon}")
+                    return None
+
+                address = location.get("address", {})
+                city = (address.get("city") or
+                       address.get("town") or
+                       address.get("village") or
+                       location.get("display_name", city_name))
+
+                country = address.get("country", "Noma'lum mamlakat")
+                state = address.get("state", "")
+
+                return {
+                    "city": city,
+                    "country": country,
+                    "state": state,
+                    "display_name": location.get("display_name", city_name),
+                    "latitude": lat,
+                    "longitude": lon
+                }
         except Exception as e:
             logger.error(f"Nominatimdan shahar ma'lumotlarini olishda xatolik: {e}")
             return None
     
     def _calculate_distance(self, lat1, lon1, lat2, lon2):
-        """Calculate the distance between two points using the haversine formula"""
-        R = 6371  # Earth radius in kilometers
-        
-        # Convert degrees to radians
-        lat1_rad = math.radians(lat1)
-        lon1_rad = math.radians(lon1)
-        lat2_rad = math.radians(lat2)
-        lon2_rad = math.radians(lon2)
-        
-        # Differences in coordinates
-        dlat = lat2_rad - lat1_rad
-        dlon = lon2_rad - lon1_rad
-        
-        # Haversine formula
-        a = math.sin(dlat/2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon/2)**2
-        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
-        
-        # Distance in kilometers
-        distance = R * c
-        return distance
+        """Calculate the distance between two points - delegates to shared utility"""
+        return calculate_distance(lat1, lon1, lat2, lon2)

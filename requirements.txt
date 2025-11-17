@@ -1,5 +1,5 @@
 python-telegram-bot==21.3
-google-generativeai==0.8.5
+google-generativeai>=0.8.0
 httpx==0.28.1
 PyMuPDF==1.26.4
 python-docx==1.2.0
@@ -12,3 +12,29 @@ pillow>=10.0.0
 pytz
 APScheduler<4.0.0
 firebase-admin==6.5.0
+
+# Phase 1: Error handling & reliability
+tenacity>=8.5.0,<9.0.0
+
+# Phase 2: RAG & Vector DB (compatible versions)
+langchain>=0.2.0
+langchain-google-genai>=2.0.0
+langchain-community>=0.2.0
+langchain-core>=0.2.0
+sentence-transformers==3.3.0
+faiss-cpu==1.9.0
+
+# Phase 3: Agentic AI (optional - removed chromadb and langgraph to avoid conflicts)
+# langgraph>=0.2.0
+
+# Phase 4: Caching & Utilities
+redis==5.2.0
+aioredis==2.0.1
+pydantic==2.10.0
+tiktoken==0.8.0
+pyyaml==6.0.2
+
+# Phase 5: Advanced Features
+networkx==3.4.0
+scikit-learn==1.6.0
+nbformat==5.10.0

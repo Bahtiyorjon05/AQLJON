@@ -4,6 +4,7 @@ import time
 import logging
 import os
 import mimetypes
+from datetime import datetime
 import google.generativeai as genai
 from telegram import Update, Document
 from telegram.ext import ContextTypes
@@ -11,6 +12,26 @@ from telegram.constants import ParseMode
 from modules.utils import safe_reply, send_typing, safe_edit_message
 from modules.config import Config
 from modules.memory import MemoryManager
+from modules.retry_utils import generate_content_with_retry, upload_file_with_retry, wait_for_file_active
+
+# Import libraries for Office document text extraction
+try:
+    from docx import Document as DocxDocument
+    DOCX_AVAILABLE = True
+except ImportError:
+    DOCX_AVAILABLE = False
+
+try:
+    from openpyxl import load_workbook
+    OPENPYXL_AVAILABLE = True
+except ImportError:
+    OPENPYXL_AVAILABLE = False
+
+try:
+    from pptx import Presentation
+    PPTX_AVAILABLE = True
+except ImportError:
+    PPTX_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +41,16 @@ class DocumentHandler:
     def __init__(self, gemini_model, memory_manager: MemoryManager):
         self.model = gemini_model
         self.memory = memory_manager
+        self.rag_chain = None  # RAG system for semantic search (set via set_rag())
         # Track active document processing tasks per user
         self.active_tasks = {}
+        # Cleanup task will be started by main.py after event loop starts
+        self._cleanup_task = None
+
+    def set_rag(self, rag_chain):
+        """Set RAG chain for document memory integration"""
+        self.rag_chain = rag_chain
+        logger.info("✅ RAG chain integrated into DocumentHandler")
     
     def _get_user_task_key(self, chat_id, task_id=None):
         """Generate a unique key for tracking user document processing tasks"""
@@ -44,7 +73,29 @@ class DocumentHandler:
         task_key = self._get_user_task_key(chat_id, task_id)
         if task_key in self.active_tasks:
             del self.active_tasks[task_key]
-    
+
+    async def _cleanup_completed_tasks(self):
+        """Periodically clean up completed tasks to prevent memory leaks"""
+        while True:
+            try:
+                await asyncio.sleep(3600)  # Run every hour
+
+                # Find all completed tasks
+                completed_keys = [
+                    key for key, task in self.active_tasks.items()
+                    if task.done()
+                ]
+
+                # Remove completed tasks
+                for key in completed_keys:
+                    del self.active_tasks[key]
+
+                if completed_keys:
+                    logger.info(f"🧹 Cleaned up {len(completed_keys)} completed document tasks. Active tasks: {len(self.active_tasks)}")
+
+            except Exception as e:
+                logger.error(f"Error in document task cleanup: {e}")
+
     async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle document uploads and analysis - allow concurrent processing"""
         if not update or not update.message or not update.message.document:
@@ -111,25 +162,40 @@ class DocumentHandler:
                 # Determine file type and process accordingly
                 file_type = self._get_file_type(document.file_name if document.file_name else '', tmp_path)
                 
-                # Process with Gemini in separate thread
-                def process_with_gemini():
+                # Process with Gemini using retry logic
+                async def process_with_gemini():
                     try:
-                        # Upload to Gemini
-                        uploaded = genai.upload_file(tmp_path)
-                        
-                        # Wait for processing
-                        import time
-                        time.sleep(3)  # Give Gemini time to process
-                        
-                        # Generate response with enhanced guidelines based on file type
+                        # Get content context and instruction
                         content_context = self.memory.get_content_context(chat_id)
                         instruction = self._get_processing_instruction(file_type, content_context)
-                        
-                        response = self.model.generate_content([
-                            {"role": "user", "parts": [instruction]},
-                            {"role": "user", "parts": [uploaded]}
-                        ])
-                        
+
+                        # Check if file type needs text extraction (Office documents)
+                        if file_type in ['word', 'excel', 'powerpoint']:
+                            # Extract text from Office document
+                            extracted_text = self._extract_text_from_office_doc(tmp_path, file_type)
+
+                            if extracted_text:
+                                # Send extracted text to Gemini for analysis
+                                combined_prompt = f"{instruction}\n\nDocument content:\n{extracted_text}"
+                                response = await generate_content_with_retry(
+                                    self.model,
+                                    combined_prompt
+                                )
+                            else:
+                                return f"❌ {file_type.capitalize()} hujjatidan matnni ajratib ololmadim. Boshqa formatda yuboring (PDF, TXT)."
+                        else:
+                            # For other file types (PDF, images, etc.), upload to Gemini directly
+                            uploaded = await upload_file_with_retry(tmp_path)
+                            uploaded = await wait_for_file_active(uploaded, timeout=30)
+
+                            response = await generate_content_with_retry(
+                                self.model,
+                                [
+                                    {"role": "user", "parts": [instruction]},
+                                    {"role": "user", "parts": [uploaded]}
+                                ]
+                            )
+
                         # Better validation of Gemini response
                         if response and hasattr(response, 'candidates') and response.candidates:
                             candidate = response.candidates[0]
@@ -142,10 +208,10 @@ class DocumentHandler:
                         logger.error(f"Gemini processing error: {e}")
                         return None
                 
-                # Run Gemini processing in thread pool with timeout
+                # Run Gemini processing with timeout
                 try:
                     reply = await asyncio.wait_for(
-                        asyncio.to_thread(process_with_gemini),
+                        process_with_gemini(),
                         timeout=Config.PROCESSING_TIMEOUT
                     )
                 except asyncio.TimeoutError:
@@ -154,13 +220,30 @@ class DocumentHandler:
                 if reply:
                     # Store document content in memory for future reference with complete details
                     self.memory.store_content_memory(
-                        chat_id, 
-                        "document", 
+                        chat_id,
+                        "document",
                         reply,  # summary
                         document.file_name if document.file_name else "unknown",  # file name
                         reply  # full content
                     )
-                    
+
+                    # Add to RAG system for semantic search (2025 best practice)
+                    if self.rag_chain:
+                        try:
+                            self.rag_chain.add_document_to_memory(
+                                chat_id,
+                                reply,  # Document content/summary
+                                {
+                                    'file_name': document.file_name if document.file_name else "unknown",
+                                    'file_type': file_type,
+                                    'timestamp': datetime.now().isoformat(),
+                                    'content_type': 'document'
+                                }
+                            )
+                            logger.info(f"📚 Document added to RAG system for user {chat_id}")
+                        except Exception as rag_error:
+                            logger.error(f"Failed to add document to RAG: {rag_error}")
+
                     self.memory.add_to_history(chat_id, "user", f"[uploaded document: {document.file_name if document.file_name else 'unknown'}]")
                     self.memory.add_to_history(chat_id, "model", reply)
                     
@@ -291,7 +374,49 @@ class DocumentHandler:
                     return 'powerpoint'
         
         return 'unknown'
-    
+
+    def _extract_text_from_office_doc(self, file_path: str, file_type: str) -> str:
+        """Extract text from Office documents (.docx, .xlsx, .pptx)"""
+        try:
+            if file_type == 'word' and DOCX_AVAILABLE:
+                # Extract text from .docx
+                doc = DocxDocument(file_path)
+                text_parts = []
+                for para in doc.paragraphs:
+                    if para.text.strip():
+                        text_parts.append(para.text)
+                return '\n'.join(text_parts)
+
+            elif file_type == 'excel' and OPENPYXL_AVAILABLE:
+                # Extract text from .xlsx
+                wb = load_workbook(file_path, data_only=True)
+                text_parts = []
+                for sheet_name in wb.sheetnames:
+                    sheet = wb[sheet_name]
+                    text_parts.append(f"Sheet: {sheet_name}")
+                    for row in sheet.iter_rows(values_only=True):
+                        row_text = '\t'.join([str(cell) if cell is not None else '' for cell in row])
+                        if row_text.strip():
+                            text_parts.append(row_text)
+                return '\n'.join(text_parts)
+
+            elif file_type == 'powerpoint' and PPTX_AVAILABLE:
+                # Extract text from .pptx
+                prs = Presentation(file_path)
+                text_parts = []
+                for i, slide in enumerate(prs.slides, 1):
+                    text_parts.append(f"Slide {i}:")
+                    for shape in slide.shapes:
+                        if hasattr(shape, "text") and shape.text.strip():
+                            text_parts.append(shape.text)
+                return '\n'.join(text_parts)
+
+            else:
+                return None
+        except Exception as e:
+            logger.error(f"Error extracting text from {file_type} document: {e}")
+            return None
+
     def _get_processing_instruction(self, file_type: str, content_context: str) -> str:
         """Get processing instruction based on file type"""
         base_instruction = (

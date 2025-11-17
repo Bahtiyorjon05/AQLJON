@@ -131,6 +131,7 @@ celerybeat.pid
 .env
 .venv
 .venv311
+venv311/
 env/
 venv/
 ENV/
@@ -229,3 +230,6 @@ firebase-credentials.json
 test_*.py
 *_test.py
 nul
+
+# Vector stores (user-specific data, should not be committed)
+vector_stores/

@@ -5,10 +5,11 @@ from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboard
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 from modules.utils import safe_reply, safe_edit_message
+from modules.retry_utils import http_get_with_retry
+from modules.location_features.utils import validate_city_name, validate_coordinates
 from .favorites import FavoritesHandler
 from .nearby import NearbyHandler
 from .prayer_times import PrayerTimesHandler
-import aiohttp
 
 logger = logging.getLogger(__name__)
 
@@ -332,13 +333,23 @@ class LocationFeatureHandler:
         """Handle city search by name"""
         if not update.effective_chat:
             return
-        
+
+        # Validate city name
+        is_valid, cleaned_city = validate_city_name(city_name)
+        if not is_valid:
+            if update.effective_message:
+                await update.effective_message.reply_text(
+                    "❌ Noto'g'ri shahar nomi. Iltimos, kamida 2 belgili nom kiriting.",
+                    parse_mode=ParseMode.HTML
+                )
+            return
+
         try:
             # Show processing message
             processing_msg = await safe_reply(update, "🏙️ Shahar qidirilmoqda...")
-            
+
             # Using Nominatim for geocoding
-            location_info = await self._get_location_info_by_name(city_name)
+            location_info = await self._get_location_info_by_name(cleaned_city)
             
             if location_info:
                 # Store location with expiration
@@ -402,29 +413,27 @@ class LocationFeatureHandler:
                 "User-Agent": "AQLJON-bot/1.0 (https://t.me/AQLJON_bot)"
             }
             
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, headers=headers) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        address = data.get("address", {})
-                        
-                        city = (address.get("city") or 
-                               address.get("town") or 
-                               address.get("village") or 
-                               "Noma'lum shahar")
-                        
-                        country = address.get("country", "Noma'lum mamlakat")
-                        state = address.get("state", "")
-                        display_name = data.get("display_name", "Noma'lum joylashuv")
-                        
-                        return {
-                            "city": city,
-                            "country": country,
-                            "state": state,
-                            "display_name": display_name,
-                            "latitude": latitude,
-                            "longitude": longitude
-                        }
+            data = await http_get_with_retry(url, params=params, headers=headers, timeout=15)
+            if data:
+                address = data.get("address", {})
+
+                city = (address.get("city") or
+                       address.get("town") or
+                       address.get("village") or
+                       "Noma'lum shahar")
+
+                country = address.get("country", "Noma'lum mamlakat")
+                state = address.get("state", "")
+                display_name = data.get("display_name", "Noma'lum joylashuv")
+
+                return {
+                    "city": city,
+                    "country": country,
+                    "state": state,
+                    "display_name": display_name,
+                    "latitude": latitude,
+                    "longitude": longitude
+                }
         except Exception as e:
             logger.error(f"Nominatimdan joylashuv ma'lumotlarini olishda xatolik: {e}")
             return {
@@ -453,33 +462,35 @@ class LocationFeatureHandler:
                 "User-Agent": "AQLJON-bot/1.0 (https://t.me/AQLJON_bot)"
             }
             
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, headers=headers) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if data:
-                            # Get the most relevant result
-                            location = data[0]
-                            lat = float(location["lat"])
-                            lon = float(location["lon"])
-                            
-                            address = location.get("address", {})
-                            city = (address.get("city") or 
-                                   address.get("town") or 
-                                   address.get("village") or 
-                                   city_name)
-                            
-                            country = address.get("country", "Noma'lum mamlakat")
-                            state = address.get("state", "")
-                            
-                            return {
-                                "city": city,
-                                "country": country,
-                                "state": state,
-                                "display_name": location.get("display_name", city_name),
-                                "latitude": lat,
-                                "longitude": lon
-                            }
+            data = await http_get_with_retry(url, params=params, headers=headers, timeout=15)
+            if data and len(data) > 0:
+                # Get the most relevant result
+                location = data[0]
+                lat = float(location["lat"])
+                lon = float(location["lon"])
+
+                # Validate coordinates
+                if not validate_coordinates(lat, lon):
+                    logger.error(f"Invalid coordinates from Nominatim: {lat}, {lon}")
+                    return None
+
+                address = location.get("address", {})
+                city = (address.get("city") or
+                       address.get("town") or
+                       address.get("village") or
+                       city_name)
+
+                country = address.get("country", "Noma'lum mamlakat")
+                state = address.get("state", "")
+
+                return {
+                    "city": city,
+                    "country": country,
+                    "state": state,
+                    "display_name": location.get("display_name", city_name),
+                    "latitude": lat,
+                    "longitude": lon
+                }
         except Exception as e:
             logger.error(f"Nominatimdan shahar ma'lumotlarini olishda xatolik: {e}")
             return {
