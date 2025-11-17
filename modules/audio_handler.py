@@ -314,13 +314,13 @@ class AudioHandler:
             if analyzing_msg is not None:
                 try:
                     await safe_edit_message(analyzing_msg, error_msg, parse_mode=ParseMode.HTML)
-                except:
-                    pass
+                except Exception as e:
+                    logger.error(f"Failed to edit error message: {e}")
             else:
                 try:
                     await safe_reply(update, error_msg, parse_mode=ParseMode.HTML)
-                except:
-                    pass
+                except Exception as e:
+                    logger.error(f"Failed to send error message: {e}")
         finally:
             # Unregister the specific task when completed
             self._unregister_task(chat_id, task_id)

@@ -176,8 +176,8 @@ class MemoryManager:
                 except Exception as e:
                     print(f"Error preparing batch for {chat_id}: {e}")
 
-            # Commit remaining operations
-            if saved_count % 500 != 0:
+            # Commit remaining operations (if any were added after last batch commit)
+            if saved_count > 0 and saved_count % 500 != 0:
                 batch.commit()
 
             print(f"[OK] Batch saved {saved_count} users to Firestore")

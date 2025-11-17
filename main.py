@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import time
-import pytz
 import google.generativeai as genai
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ChatMemberHandler
 from telegram.error import NetworkError
@@ -102,11 +101,11 @@ async def periodic_save(app):
             saved = memory_manager.save_persistent_data()
             if saved:
                 logger.info(f"Auto-saved user data: {len(memory_manager.user_stats)} users, {len(memory_manager.blocked_users)} blocked")
-        except Exception as e:
-            logger.error(f"Error in periodic save: {e}")
         except asyncio.CancelledError:
             logger.info("Periodic save task cancelled")
             break
+        except Exception as e:
+            logger.error(f"Error in periodic save: {e}")
 
 # ─── 🧹 Periodic Cleanup Task ─────────────────────────────────────────────────
 async def periodic_cleanup(app):
@@ -124,11 +123,11 @@ async def periodic_cleanup(app):
             # Save data after cleanup
             memory_manager.save_persistent_data()
             logger.info("Data saved after cleanup")
-        except Exception as e:
-            logger.error(f"Error in periodic cleanup: {e}")
         except asyncio.CancelledError:
             logger.info("Periodic cleanup task cancelled")
             break
+        except Exception as e:
+            logger.error(f"Error in periodic cleanup: {e}")
 
 # ─── ⚙️ Application Post-Initialization ─────────────────────────────────────────────────
 async def post_init(application):
