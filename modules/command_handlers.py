@@ -203,9 +203,27 @@ class CommandHandlers:
         from modules.utils import send_fast_reply
         send_fast_reply(update.message, stats_text)
 
-    async def admin_stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show detailed admin statistics (admin only) with pagination"""
-        if not update or not update.message or not update.effective_chat or not update.effective_user:
+    async def admin_stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, edit_message: bool = False):
+        """Show detailed admin statistics (admin only) with pagination
+
+        Args:
+            update: Telegram update object
+            context: Callback context
+            edit_message: If True, edit the existing message instead of sending a new one (for pagination)
+        """
+        # Support both regular messages and callback queries
+        if not update or not update.effective_user:
+            return
+
+        # Determine if this is from a callback or a command
+        message = None
+        if update.message:
+            message = update.message
+        elif update.callback_query and update.callback_query.message:
+            message = update.callback_query.message
+            edit_message = True  # Always edit when from callback
+
+        if not message:
             return
         
         user_id = str(update.effective_user.id)
@@ -240,10 +258,18 @@ class CommandHandlers:
             # Cache is valid for 1 second only (reduced from 2 for even more responsive updates)
             if current_time - self._admin_stats_cache_time[cache_key] < 1:
                 cached_result = self._admin_stats_cache[cache_key]
-                if cached_result[1]:  # Has reply markup
-                    await update.message.reply_text(cached_result[0], parse_mode=ParseMode.HTML, reply_markup=cached_result[1])
+                if edit_message:
+                    # Edit existing message for pagination
+                    try:
+                        await message.edit_text(cached_result[0], parse_mode=ParseMode.HTML, reply_markup=cached_result[1])
+                    except Exception as e:
+                        logger.error(f"Error editing admin stats message: {e}")
                 else:
-                    await send_long_message(update, cached_result[0])
+                    # Send new message for new command
+                    if cached_result[1]:  # Has reply markup
+                        await message.reply_text(cached_result[0], parse_mode=ParseMode.HTML, reply_markup=cached_result[1])
+                    else:
+                        await send_long_message(update, cached_result[0])
                 return
         
         # Calculate comprehensive statistics
@@ -468,11 +494,25 @@ class CommandHandlers:
         # Cache the result for better performance (reduced cache time)
         self._admin_stats_cache[cache_key] = (admin_stats_text, reply_markup)
         self._admin_stats_cache_time[cache_key] = current_time
-        
-        if reply_markup:
-            await update.message.reply_text(admin_stats_text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+
+        # Send or edit message based on mode
+        if edit_message:
+            # Edit existing message for pagination
+            try:
+                await message.edit_text(admin_stats_text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+            except Exception as e:
+                logger.error(f"Error editing admin stats message: {e}")
+                # If edit fails, send a new message
+                if reply_markup:
+                    await message.reply_text(admin_stats_text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+                else:
+                    await send_long_message(update, admin_stats_text)
         else:
-            await send_long_message(update, admin_stats_text)
+            # Send new message for new command
+            if reply_markup:
+                await message.reply_text(admin_stats_text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+            else:
+                await send_long_message(update, admin_stats_text)
     
     async def handle_admin_stats_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle pagination callbacks for admin stats"""
@@ -494,11 +534,12 @@ class CommandHandlers:
                 if context.user_data is None:
                     context.user_data = {}
                 context.user_data['admin_stats_page'] = page
-                
-                # Re-call admin stats with new page
-                await self.admin_stats_command(update, context)
+
+                # Re-call admin stats with new page - will auto-edit message
+                await self.admin_stats_command(update, context, edit_message=True)
                 await query.answer()
-            except (ValueError, IndexError):
+            except (ValueError, IndexError) as e:
+                logger.error(f"Error parsing admin stats page: {e}")
                 await query.answer("❌ Invalid page", show_alert=True)
         elif query.data and query.data.startswith("admin_stats_blocked_page_"):
             try:
@@ -507,11 +548,12 @@ class CommandHandlers:
                 if context.user_data is None:
                     context.user_data = {}
                 context.user_data['admin_stats_blocked_page'] = blocked_page
-                
-                # Re-call admin stats with new blocked page
-                await self.admin_stats_command(update, context)
+
+                # Re-call admin stats with new blocked page - will auto-edit message
+                await self.admin_stats_command(update, context, edit_message=True)
                 await query.answer()
-            except (ValueError, IndexError):
+            except (ValueError, IndexError) as e:
+                logger.error(f"Error parsing admin stats blocked page: {e}")
                 await query.answer("❌ Invalid page", show_alert=True)
         elif query.data and query.data == "admin_stats_info":
             await query.answer("Page navigation", show_alert=False)
