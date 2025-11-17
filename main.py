@@ -388,13 +388,16 @@ def main():
     app.add_handler(CommandHandler("update", update_handler))
     app.add_handler(CommandHandler("reply", reply_handler))
 
-    
-    # Register callback handler for inline buttons
+
+    # Register callback handlers for inline buttons
+    # IMPORTANT: More specific handlers MUST come before general handlers!
     from telegram.ext import CallbackQueryHandler
-    app.add_handler(CallbackQueryHandler(concurrent_callback_handler))
-    
-    # Register callback handler for admin stats pagination
+
+    # Register admin stats pagination callback handler FIRST (more specific)
     app.add_handler(CallbackQueryHandler(concurrent_admin_stats_callback_handler, pattern="^admin_stats_"))
+
+    # Register general callback handler LAST (catches all remaining callbacks)
+    app.add_handler(CallbackQueryHandler(concurrent_callback_handler))
     
     # Register message handlers with enhanced concurrency
     # Note: We're using a single text handler that checks for location states internally
