@@ -153,57 +153,72 @@ def clean_html(text: str) -> str:
 async def send_long_message(update: Update, text: str, parse_mode=ParseMode.HTML):
     if not update or not update.effective_message:
         return
-    # Don't clean HTML for media responses as they need formatting
-    # text = clean_html(text)  # Commented out to preserve HTML formatting
-    # Split message into chunks of 4096 characters or less
-    chunks = []
-    while len(text) > 4096:
-        # Try to split at a newline or space near the limit to avoid cutting words
-        split_pos = 4096
-        # Look for a good split point (newline or space)
-        for pos in range(4096, max(4096-200, 0), -1):
-            if text[pos] == '\n':
-                split_pos = pos
-                break
-            elif text[pos] == ' ' and split_pos == 4096:
-                split_pos = pos
-        
-        chunks.append(text[:split_pos])
-        text = text[split_pos:].lstrip()  # Remove leading whitespace from next chunk
+
+    # Constants
+    MAX_LENGTH = 4096
     
-    # Add the last chunk if there's remaining text
-    if text:
-        chunks.append(text)
-    
-    # Send all chunks
-    for i, chunk in enumerate(chunks):
+    # Helper to send chunk
+    async def send_chunk(chunk):
         try:
             await update.effective_message.reply_text(chunk, parse_mode=parse_mode)
-            # Add delay between messages except for the last one
-            if i < len(chunks) - 1:
-                await asyncio.sleep(0.3)  # Increased delay to prevent rate limiting
         except RetryAfter as e:
             logger.warning(f"Rate limited, waiting {e.retry_after} seconds")
             await asyncio.sleep(e.retry_after + 1)
-            try:
-                await update.effective_message.reply_text(chunk, parse_mode=parse_mode)
-                if i < len(chunks) - 1:
-                    await asyncio.sleep(0.3)
-            except Exception:
-                await update.effective_message.reply_text(chunk)  # Fallback to plain text
+            await update.effective_message.reply_text(chunk, parse_mode=parse_mode)
         except (NetworkError, TelegramError, TimedOut) as e:
             logger.error(f"Failed to send message chunk: {e}")
+            # Fallback to plain text if HTML fails
             try:
-                # Fallback: send as plain text
-                await update.effective_message.reply_text(chunk)
-                if i < len(chunks) - 1:
-                    await asyncio.sleep(0.3)
-            except Exception as fallback_error:
-                logger.error(f"Fallback message also failed: {fallback_error}")
-                break
-        except Exception as e:
-            logger.error(f"Unexpected error in send_long_message: {e}")
-            break
+                await update.effective_message.reply_text(chunk, parse_mode=None)
+            except Exception:
+                pass
+
+    if len(text) <= MAX_LENGTH:
+        await send_chunk(text)
+        return
+
+    # Intelligent splitting for HTML
+    # We prioritize splitting at newlines, then spaces, but we must respect tags
+    # A simple robust approach for long HTML is to close tags at split and reopen them
+    # But for simplicity and reliability, we will split by blocks if possible
+    
+    chunks = []
+    current_chunk = ""
+    
+    # Split by lines first to maintain structure
+    lines = text.split('\n')
+    
+    for line in lines:
+        if len(current_chunk) + len(line) + 1 > MAX_LENGTH:
+            # Current chunk is full, send it
+            if current_chunk:
+                chunks.append(current_chunk)
+                current_chunk = ""
+            
+            # If the line itself is too long, we must split it by chars (risky for HTML)
+            # For safety with huge HTML lines, we turn off parse_mode for that specific chunk if needed
+            # or just accept hard split
+            if len(line) > MAX_LENGTH:
+                # Hard split the long line
+                for i in range(0, len(line), MAX_LENGTH):
+                    chunks.append(line[i:i+MAX_LENGTH])
+            else:
+                current_chunk = line
+        else:
+            if current_chunk:
+                current_chunk += "\n" + line
+            else:
+                current_chunk = line
+    
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    # Send all chunks
+    for i, chunk in enumerate(chunks):
+        await send_chunk(chunk)
+        # Add delay between messages except for the last one
+        if i < len(chunks) - 1:
+            await asyncio.sleep(0.3)
 
 # ─── 📋 Keyboard Functions ────────────────────────────────────
 def main_menu_keyboard():

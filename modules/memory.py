@@ -28,6 +28,7 @@ class MemoryManager:
         # Initialize persistent data structures
         self.user_stats = {}
         self.user_info = {}
+        self.user_states = {}  # Track user conversational states
         self.blocked_users = set()
 
         # Batch write optimization - Phase 1 improvement
@@ -98,6 +99,10 @@ class MemoryManager:
                 if 'info' in data:
                     self.user_info[chat_id] = data['info']
 
+                # Load user conversational states
+                if 'state' in data:
+                    self.user_states[chat_id] = data['state']
+
                 # Load blocked status
                 if data.get('blocked', False):
                     self.blocked_users.add(chat_id)
@@ -108,6 +113,41 @@ class MemoryManager:
 
         except Exception as e:
             print(f"[ERROR] Error loading from Firestore: {e}")
+
+    def log_chat_message(self, chat_id: str, role: str, content: str, msg_type: str = "text", file_info: dict = None):
+        """Log a chat message permanently to Firestore for the website dashboard"""
+        if not self.db:
+            return
+
+        try:
+            # Create a new document in 'chat_logs' collection
+            # Structure: chat_logs/{timestamp_chat_id}
+            timestamp = time.time()
+            doc_id = f"{int(timestamp*1000)}_{chat_id}"
+            
+            log_entry = {
+                "chat_id": chat_id,
+                "role": role,  # 'user' or 'bot'
+                "content": content,
+                "type": msg_type,  # 'text', 'photo', 'document', etc.
+                "timestamp": firestore.SERVER_TIMESTAMP,
+                "timestamp_unix": timestamp
+            }
+            
+            if file_info:
+                log_entry["file_info"] = file_info
+                
+            # Add user info for easier display
+            if chat_id in self.user_info:
+                user = self.user_info[chat_id]
+                log_entry["user_name"] = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
+                log_entry["username"] = user.get('username', '')
+
+            # Save to Firestore
+            self.db.collection('chat_logs').document(doc_id).set(log_entry)
+            
+        except Exception as e:
+            print(f"Error logging chat message: {e}")
 
     def _save_to_firestore(self, chat_id: str):
         """Save a single user's data to Firestore"""
@@ -125,6 +165,9 @@ class MemoryManager:
 
             if chat_id in self.user_info:
                 data['info'] = self.user_info[chat_id]
+                
+            if chat_id in self.user_states:
+                data['state'] = self.user_states[chat_id]
 
             data['blocked'] = chat_id in self.blocked_users
             data['last_updated'] = firestore.SERVER_TIMESTAMP
@@ -160,6 +203,9 @@ class MemoryManager:
 
                     if chat_id in self.user_info:
                         data['info'] = self.user_info[chat_id]
+                        
+                    if chat_id in self.user_states:
+                        data['state'] = self.user_states[chat_id]
 
                     data['blocked'] = chat_id in self.blocked_users
                     data['last_updated'] = firestore.SERVER_TIMESTAMP
@@ -204,6 +250,7 @@ class MemoryManager:
             all_chat_ids.update(self.user_stats.keys())
             all_chat_ids.update(self.user_info.keys())
             all_chat_ids.update(self.blocked_users)
+            all_chat_ids.update(self.user_states.keys())
 
             for chat_id in all_chat_ids:
                 user_ref = self.db.collection('users').document(chat_id)
@@ -216,6 +263,9 @@ class MemoryManager:
 
                 if chat_id in self.user_info:
                     data['info'] = self.user_info[chat_id]
+                    
+                if chat_id in self.user_states:
+                    data['state'] = self.user_states[chat_id]
 
                 data['blocked'] = chat_id in self.blocked_users
 
