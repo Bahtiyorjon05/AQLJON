@@ -144,6 +144,8 @@ cp .env.example .env
 # Edit .env with your API keys:
 # - TELEGRAM_BOT_TOKEN (required)
 # - GEMINI_API_KEY (required)
+# - GEMINI_MODEL (optional, default: gemini-3-flash-preview)
+# - GEMINI_MODEL_FALLBACK (optional, default: gemini-2.5-flash)
 # - ADMIN_ID (optional - your Telegram user ID)
 # - SERPER_API_KEY (optional - for web search)
 ```
@@ -178,6 +180,8 @@ heroku create your-aqljon-bot
 ```bash
 heroku config:set TELEGRAM_BOT_TOKEN="your_telegram_bot_token"
 heroku config:set GEMINI_API_KEY="your_gemini_api_key"
+heroku config:set GEMINI_MODEL="gemini-3-flash-preview"  # Optional
+heroku config:set GEMINI_MODEL_FALLBACK="gemini-2.5-flash"  # Optional
 heroku config:set ADMIN_ID="your_telegram_user_id"
 heroku config:set SERPER_API_KEY="your_serper_api_key"  # Optional
 ```
@@ -208,6 +212,8 @@ heroku logs --tail
 ```env
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 GEMINI_API_KEY=your_gemini_api_key
+GEMINI_MODEL=gemini-3-flash-preview
+GEMINI_MODEL_FALLBACK=gemini-2.5-flash
 SERPER_API_KEY=your_serper_api_key  
 ADMIN_ID=your_telegram_user_id      
 ```

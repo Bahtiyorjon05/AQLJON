@@ -13,6 +13,7 @@ from tenacity import (
     before_sleep_log
 )
 from google.api_core import exceptions as google_exceptions
+from modules.gemini_client import get_file, get_file_state, upload_file
 
 logger = logging.getLogger(__name__)
 
@@ -88,10 +89,8 @@ async def upload_file_with_retry(file_path, timeout=90):
     Returns:
         Uploaded file object
     """
-    import google.generativeai as genai
-
     try:
-        uploaded = await asyncio.to_thread(lambda: genai.upload_file(file_path))
+        uploaded = await asyncio.to_thread(upload_file, file_path)
         return uploaded
     except Exception as e:
         logger.error(f"File upload error: {e}")
@@ -108,26 +107,23 @@ async def wait_for_file_active(uploaded_file, timeout=30):
     Returns:
         Active file object
     """
-    import google.generativeai as genai
-    import time
-
     interval = 2
     elapsed = 0
+    state = get_file_state(uploaded_file)
 
-    while uploaded_file.state.name != "ACTIVE" and elapsed < timeout:
-        if uploaded_file.state.name == "FAILED":
-            raise Exception(f"File processing failed: {uploaded_file.state}")
+    while state != "ACTIVE" and elapsed < timeout:
+        if state == "FAILED":
+            raise Exception(f"File processing failed: {state}")
 
         await asyncio.sleep(interval)
         elapsed += interval
 
         # Refresh file state
-        uploaded_file = await asyncio.to_thread(
-            lambda: genai.get_file(uploaded_file.name)
-        )
+        uploaded_file = await asyncio.to_thread(get_file, uploaded_file.name)
+        state = get_file_state(uploaded_file)
 
-    if uploaded_file.state.name != "ACTIVE":
-        raise Exception(f"File processing timeout. Final state: {uploaded_file.state.name}")
+    if state != "ACTIVE":
+        raise Exception(f"File processing timeout. Final state: {state}")
 
     return uploaded_file
 

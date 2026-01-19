@@ -1135,6 +1135,15 @@ class CommandHandlers:
             chat_id = str(update.effective_chat.id) if update and update.effective_chat else "unknown"
             message = update.message.text.strip() if update and update.message and update.message.text else ""
 
+            # Log user message to Firestore
+            if update.effective_user and message:
+                self.memory.log_chat_message(
+                    chat_id=chat_id, 
+                    role="user", 
+                    content=message, 
+                    msg_type="text"
+                )
+
             # Handle keyboard button presses for conversational flows - PRIORITY HANDLERS FOR MAXIMUM SPEED
             # These must be at the very beginning for immediate response to keyboard selections
             if message in ["📄 PDF fayl", "📊 Excel fayl", "📝 Word hujjat", "📽️ PowerPoint slayd"]:
@@ -1496,6 +1505,15 @@ class CommandHandlers:
                 
                 if reply:  # Only add to history if we got a reply
                     self.memory.add_to_history(chat_id, "model", reply)
+                    
+                    # Log bot response to Firestore
+                    self.memory.log_chat_message(
+                        chat_id=chat_id,
+                        role="bot",
+                        content=reply,
+                        msg_type="text"
+                    )
+                    
                     await send_long_message(update, reply)
                 else:
                     if update.message:

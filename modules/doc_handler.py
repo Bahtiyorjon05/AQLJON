@@ -5,7 +5,6 @@ import logging
 import os
 import mimetypes
 from datetime import datetime
-import google.generativeai as genai
 from telegram import Update, Document
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode

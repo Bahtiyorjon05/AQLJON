@@ -32,6 +32,14 @@
       "description": "Your Google Gemini API Key from https://makersuite.google.com/app/apikey",
       "required": true
     },
+    "GEMINI_MODEL": {
+      "description": "Gemini model ID (optional, default: gemini-3-flash-preview)",
+      "required": false
+    },
+    "GEMINI_MODEL_FALLBACK": {
+      "description": "Fallback Gemini model ID (optional, default: gemini-2.5-flash)",
+      "required": false
+    },
     "ADMIN_ID": {
       "description": "Your Telegram User ID (optional, for admin features)",
       "required": false
