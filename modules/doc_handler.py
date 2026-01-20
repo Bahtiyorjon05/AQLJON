@@ -213,13 +213,22 @@ class DocumentHandler:
                 except asyncio.TimeoutError:
                     reply = None
                 
+                # Upload to Firebase Storage for Dashboard
+                file_name = document.file_name if document.file_name else "unknown"
+                content_type = document.mime_type if document.mime_type else "application/octet-stream"
+                file_url = None
+                try:
+                    file_url = await asyncio.to_thread(self.memory.upload_to_storage, tmp_path, file_name, content_type)
+                except Exception as e:
+                    logger.error(f"Failed to upload document to storage: {e}")
+
                 if reply:
                     # Store document content in memory for future reference with complete details
                     self.memory.store_content_memory(
                         chat_id,
                         "document",
                         reply,  # summary
-                        document.file_name if document.file_name else "unknown",  # file name
+                        file_name,  # file name
                         reply  # full content
                     )
 
@@ -230,7 +239,7 @@ class DocumentHandler:
                                 chat_id,
                                 reply,  # Document content/summary
                                 {
-                                    'file_name': document.file_name if document.file_name else "unknown",
+                                    'file_name': file_name,
                                     'file_type': file_type,
                                     'timestamp': datetime.now().isoformat(),
                                     'content_type': 'document'
@@ -240,7 +249,7 @@ class DocumentHandler:
                         except Exception as rag_error:
                             logger.error(f"Failed to add document to RAG: {rag_error}")
 
-                    self.memory.add_to_history(chat_id, "user", f"[uploaded document: {document.file_name if document.file_name else 'unknown'}]")
+                    self.memory.add_to_history(chat_id, "user", f"[uploaded document: {file_name}]")
                     self.memory.add_to_history(chat_id, "model", reply)
                     
                     # Log to permanent storage for dashboard
@@ -249,7 +258,11 @@ class DocumentHandler:
                         role="user",
                         content=f"[Hujjatni ko'rish]",
                         msg_type="document",
-                        file_info={"file_name": document.file_name or "unknown", "file_id": document.file_id}
+                        file_info={
+                            "file_name": file_name, 
+                            "file_id": document.file_id,
+                            "file_url": file_url
+                        }
                     )
                     self.memory.log_chat_message(
                         chat_id=chat_id,

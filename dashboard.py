@@ -345,11 +345,43 @@ def setup_dashboard(app, memory_manager):
                                 <i class="bi bi-file-earmark-text fs-4 text-secondary"></i>
                             {% endif %}
                             
-                            <div class="overflow-hidden">
+                            <div class="overflow-hidden w-100">
                                 <div class="fw-bold text-truncate">{{ msg.file_info.file_name }}</div>
-                                <small class="text-secondary opacity-75">
+                                <small class="text-secondary opacity-75 d-block mb-1">
                                     {% if msg.type == 'photo' %}Rasm fayl{% elif msg.type == 'video' %}Video fayl{% elif msg.type == 'audio' %}Audio xabar{% else %}Hujjat{% endif %}
                                 </small>
+                                
+                                {% if msg.file_info.file_url %}
+                                    {% if msg.type == 'photo' %}
+                                    <div class="mt-2">
+                                        <a href="{{ msg.file_info.file_url }}" target="_blank">
+                                            <img src="{{ msg.file_info.file_url }}" class="img-fluid rounded" style="max-height: 200px; width: auto;" alt="Rasm">
+                                        </a>
+                                    </div>
+                                    {% elif msg.type == 'audio' %}
+                                    <div class="mt-2">
+                                        <audio controls class="w-100">
+                                            <source src="{{ msg.file_info.file_url }}">
+                                            Your browser does not support the audio element.
+                                        </audio>
+                                    </div>
+                                    {% elif msg.type == 'video' %}
+                                    <div class="mt-2">
+                                        <video controls class="w-100 rounded" style="max-height: 240px;">
+                                            <source src="{{ msg.file_info.file_url }}">
+                                            Your browser does not support the video element.
+                                        </video>
+                                    </div>
+                                    {% else %}
+                                    <div class="mt-2">
+                                        <a href="{{ msg.file_info.file_url }}" target="_blank" class="btn btn-sm btn-outline-primary">
+                                            <i class="bi bi-download me-1"></i> Yuklab olish
+                                        </a>
+                                    </div>
+                                    {% endif %}
+                                {% else %}
+                                    <small class="text-muted fst-italic">Fayl saqlanmagan</small>
+                                {% endif %}
                             </div>
                         </div>
                         {% endif %}
