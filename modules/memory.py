@@ -663,7 +663,7 @@ class MemoryManager:
             self._in_cleanup = False
         
     # ─── 🧠 Conversation History Management ─────────────────────────────────────────────────
-    def log_chat_message(self, chat_id: str, role: str, content: str, msg_type: str = "text"):
+    def log_chat_message(self, chat_id: str, role: str, content: str, msg_type: str = "text", **kwargs):
         """Log chat message to history and track activity"""
         try:
             # Add to conversation history
@@ -675,6 +675,19 @@ class MemoryManager:
                 
         except Exception as e:
             print(f"Error logging chat message for {chat_id}: {e}")
+
+    def upload_to_storage(self, file_path: str, file_name: str, content_type: str):
+        """Upload file to Firebase Storage"""
+        try:
+            from firebase_admin import storage
+            bucket = storage.bucket()
+            blob = bucket.blob(f"uploads/{file_name}")
+            blob.upload_from_filename(file_path, content_type=content_type)
+            blob.make_public()
+            return blob.public_url
+        except Exception as e:
+            print(f"Error uploading to storage: {e}")
+            return None
 
     def add_to_history(self, chat_id: str, role: str, content: str):
         """Add message to user conversation history"""
