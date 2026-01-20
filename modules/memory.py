@@ -1,9 +1,10 @@
 import time
 import json
 import os
+import uuid
 from datetime import datetime, timedelta
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore, storage
 
 # ─── 🧠 Enhanced Memory Management ─────────────────────────────────────────────────
 class MemoryManager:
@@ -44,11 +45,12 @@ class MemoryManager:
 
     # ─── 💾 Firebase Initialization ─────────────────────────────────────────────────
     def _init_firebase(self):
-        """Initialize Firebase connection"""
+        """Initialize Firebase connection with Storage"""
         try:
             # Check if already initialized
             if firebase_admin._apps:
                 self.db = firestore.client()
+                self.bucket = storage.bucket()
                 print("[OK] Firebase already initialized, reusing connection")
                 return
 
@@ -58,22 +60,52 @@ class MemoryManager:
             if not firebase_creds_json:
                 print("[WARNING] FIREBASE_CREDENTIALS not found. Running in local-only mode (data will be lost on restart).")
                 self.db = None
+                self.bucket = None
                 return
 
             # Parse JSON credentials
             creds_dict = json.loads(firebase_creds_json)
             cred = credentials.Certificate(creds_dict)
+            
+            # Extract project ID for bucket name
+            project_id = creds_dict.get("project_id", "campusconnect-13lbx")
+            bucket_name = f"{project_id}.appspot.com"
 
-            # Initialize Firebase
-            firebase_admin.initialize_app(cred)
+            # Initialize Firebase with Storage Bucket
+            firebase_admin.initialize_app(cred, {
+                'storageBucket': bucket_name
+            })
             self.db = firestore.client()
+            self.bucket = storage.bucket()
 
-            print("[OK] Firebase Firestore connected successfully!")
+            print(f"[OK] Firebase Firestore & Storage ({bucket_name}) connected successfully!")
 
         except Exception as e:
             print(f"[ERROR] Firebase initialization failed: {e}")
             print("[WARNING] Running in local-only mode (data will be lost on restart)")
             self.db = None
+            self.bucket = None
+
+    def upload_to_storage(self, file_path, file_name, content_type=None):
+        """Upload a file to Firebase Storage and return public URL"""
+        if not self.bucket:
+            return None
+            
+        try:
+            # Create a unique blob name
+            blob_name = f"uploads/{int(time.time())}_{uuid.uuid4().hex[:8]}_{file_name}"
+            blob = self.bucket.blob(blob_name)
+            
+            # Upload
+            blob.upload_from_filename(file_path, content_type=content_type)
+            
+            # Make public
+            blob.make_public()
+            
+            return blob.public_url
+        except Exception as e:
+            print(f"[ERROR] Storage upload failed: {e}")
+            return None
 
     def _load_from_firestore(self):
         """Load all user data from Firestore"""

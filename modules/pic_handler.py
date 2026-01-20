@@ -193,9 +193,16 @@ class PhotoHandler:
                 except asyncio.TimeoutError:
                     reply = None
                 
+                # Upload to Firebase Storage for Dashboard
+                file_name = f"photo_{photo.file_id[:8]}.jpg"
+                file_url = None
+                try:
+                    file_url = await asyncio.to_thread(self.memory.upload_to_storage, tmp_path, file_name, "image/jpeg")
+                except Exception as e:
+                    logger.error(f"Failed to upload photo to storage: {e}")
+
                 if reply:
                     # Store photo content in memory for future reference with complete details
-                    file_name = f"photo_{photo.file_id[:8]}.jpg"
                     self.memory.store_content_memory(
                         chat_id, 
                         "photo", 
@@ -213,7 +220,11 @@ class PhotoHandler:
                         role="user",
                         content="[Rasmni ko'rish]",
                         msg_type="photo",
-                        file_info={"file_name": file_name, "file_id": photo.file_id}
+                        file_info={
+                            "file_name": file_name, 
+                            "file_id": photo.file_id,
+                            "file_url": file_url
+                        }
                     )
                     self.memory.log_chat_message(
                         chat_id=chat_id,

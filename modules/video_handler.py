@@ -205,17 +205,26 @@ class VideoHandler:
                 except asyncio.TimeoutError:
                     reply = None
                 
+                # Upload to Firebase Storage for Dashboard
+                file_name = video.file_name if video.file_name else f"video_{video.file_id[:8]}.mp4"
+                content_type = video.mime_type if video.mime_type else "video/mp4"
+                file_url = None
+                try:
+                    file_url = await asyncio.to_thread(self.memory.upload_to_storage, tmp_path, file_name, content_type)
+                except Exception as e:
+                    logger.error(f"Failed to upload video to storage: {e}")
+
                 if reply:
                     # Store video content in memory for future reference with complete details
                     self.memory.store_content_memory(
                         chat_id, 
                         "video", 
                         reply,  # summary
-                        video.file_name if video.file_name else "unknown",  # file name
+                        file_name,  # file name
                         reply  # full content
                     )
                     
-                    self.memory.add_to_history(chat_id, "user", f"[uploaded video: {video.file_name if video.file_name else 'unknown'}]")
+                    self.memory.add_to_history(chat_id, "user", f"[uploaded video: {file_name}]")
                     self.memory.add_to_history(chat_id, "model", reply)
                     
                     # Log to permanent storage for dashboard
@@ -224,7 +233,11 @@ class VideoHandler:
                         role="user",
                         content="[Videoni ko'rish]",
                         msg_type="video",
-                        file_info={"file_name": video.file_name or "unknown", "file_id": video.file_id}
+                        file_info={
+                            "file_name": file_name, 
+                            "file_id": video.file_id,
+                            "file_url": file_url
+                        }
                     )
                     self.memory.log_chat_message(
                         chat_id=chat_id,

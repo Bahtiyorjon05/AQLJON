@@ -218,9 +218,17 @@ class AudioHandler:
                 except asyncio.TimeoutError:
                     reply = None
                 
+                # Upload to Firebase Storage for Dashboard
+                file_name = getattr(media, 'file_name', f"audio_{media.file_id[:8]}{suffix}")
+                content_type = getattr(media, 'mime_type', "audio/mpeg")
+                file_url = None
+                try:
+                    file_url = await asyncio.to_thread(self.memory.upload_to_storage, tmp_path, file_name, content_type)
+                except Exception as e:
+                    logger.error(f"Failed to upload audio to storage: {e}")
+
                 if reply:
                     # Store audio content in memory for future reference with complete details
-                    file_name = getattr(media, 'file_name', f"audio_{media.file_id[:8]}{suffix}")
                     self.memory.store_content_memory(
                         chat_id, 
                         "audio", 
@@ -238,7 +246,11 @@ class AudioHandler:
                         role="user",
                         content="[Audioni eshitish]",
                         msg_type="audio",
-                        file_info={"file_name": file_name, "file_id": media.file_id}
+                        file_info={
+                            "file_name": file_name, 
+                            "file_id": media.file_id,
+                            "file_url": file_url
+                        }
                     )
                     self.memory.log_chat_message(
                         chat_id=chat_id,
