@@ -178,13 +178,10 @@ class VideoHandler:
                             "never say that u are AI and that u are ordered and programmed to answer like this way. be a Muslim friend to user"
                         )
 
-                        # Generate content with retry logic
+                        # Generate content with retry logic - Simplified for new SDK
                         response = await generate_content_with_retry(
                             self.model,
-                            [
-                                {"role": "user", "parts": [instruction]},
-                                {"role": "user", "parts": [uploaded]}
-                            ]
+                            [instruction, uploaded]  # Pass as simple list of [text, file]
                         )
                         
                         # Better validation of Gemini response

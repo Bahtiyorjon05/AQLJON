@@ -70,10 +70,9 @@ def setup_dashboard(app, memory_manager):
         .app-container {
             display: flex;
             height: 100vh;
-            max-width: 1600px;
+            max-width: 100%;
             margin: 0 auto;
             background: var(--sidebar-bg);
-            box-shadow: 0 0 20px rgba(0,0,0,0.05);
         }
 
         /* Sidebar */
@@ -126,7 +125,7 @@ def setup_dashboard(app, memory_manager):
             display: flex;
             flex-direction: column;
             background-color: var(--chat-bg);
-            background-image: url("https://site-assets.fontawesome.com/assets/img/favicons/mstile-150x150.png"); /* Minimal pattern texture could go here */
+            background-image: url("https://site-assets.fontawesome.com/assets/img/favicons/mstile-150x150.png");
             background-blend-mode: overlay;
             position: relative;
         }
@@ -274,18 +273,25 @@ def setup_dashboard(app, memory_manager):
             <div class="user-list" id="userList">
                 {% for user in users %}
                 <a href="/?chat_id={{ user.chat_id }}" class="user-item {% if current_chat_id == user.chat_id %}active{% endif %}">
-                    <div class="avatar">{{ user.initials }}</div>
+                    <div class="avatar position-relative">
+                        {{ user.initials }}
+                        {% if user.blocked %}
+                        <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="font-size: 0.5rem; padding: 4px;">
+                            <i class="bi bi-slash-circle"></i>
+                        </span>
+                        {% endif %}
+                    </div>
                     <div class="flex-grow-1 overflow-hidden">
                         <div class="d-flex justify-content-between">
-                            <span class="fw-semibold text-truncate">{{ user.name }}</span>
+                            <span class="fw-semibold text-truncate {% if user.blocked %}text-danger{% endif %}">{{ user.name }}</span>
                             <span class="small text-secondary" style="font-size: 0.75rem">{{ user.time }}</span>
                         </div>
                         <div class="d-flex justify-content-between align-items-center">
                             <span class="small text-secondary text-truncate" style="max-width: 140px;">
                                 {{ user.username }}
                             </span>
-                            {% if user.role == 'admin' %}
-                            <i class="bi bi-shield-check text-primary" style="font-size: 0.8rem"></i>
+                            {% if user.blocked %}
+                            <span class="badge bg-danger bg-opacity-10 text-danger" style="font-size: 0.6rem">BLOCKED</span>
                             {% endif %}
                         </div>
                     </div>
@@ -301,7 +307,12 @@ def setup_dashboard(app, memory_manager):
                 <div class="d-flex align-items-center gap-3">
                     <div class="avatar">{{ current_user_initials }}</div>
                     <div>
-                        <h6 class="m-0 fw-bold">{{ current_user_name }}</h6>
+                        <div class="d-flex align-items-center gap-2">
+                            <h6 class="m-0 fw-bold">{{ current_user_name }}</h6>
+                            {% if current_user_blocked %}
+                            <span class="badge bg-danger">🚫 BLOCKED</span>
+                            {% endif %}
+                        </div>
                         <span class="small text-secondary">ID: {{ current_chat_id }}</span>
                     </div>
                 </div>
@@ -376,10 +387,28 @@ def setup_dashboard(app, memory_manager):
     </div>
 
     <script>
-        // Scroll to bottom
+        // Scroll to bottom logic with memory
         const chatContainer = document.getElementById('chatContainer');
+        
+        // Restore scroll position or go to bottom
         if (chatContainer) {
-            chatContainer.scrollTop = chatContainer.scrollHeight;
+            const savedScroll = sessionStorage.getItem('chatScroll');
+            if (savedScroll && {{ 'true' if current_chat_id else 'false' }}) {
+                // If we were viewing this chat, restore position (or if it was near bottom, stick to bottom)
+                const isNearBottom = (chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight) < 100;
+                if (!isNearBottom) {
+                    chatContainer.scrollTop = savedScroll;
+                } else {
+                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                }
+            } else {
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+            
+            // Save scroll on change
+            chatContainer.addEventListener('scroll', () => {
+                sessionStorage.setItem('chatScroll', chatContainer.scrollTop);
+            });
         }
 
         // Theme Toggle Logic
@@ -416,6 +445,14 @@ def setup_dashboard(app, memory_manager):
                 el.style.display = name.includes(val) ? 'flex' : 'none';
             });
         });
+
+        // Auto Refresh Logic (Every 10 seconds)
+        {% if current_chat_id %}
+        setInterval(() => {
+            // Reload page to get new messages
+            window.location.reload();
+        }, 10000);
+        {% endif %}
     </script>
 </body>
 </html>
@@ -503,8 +540,7 @@ async def index(request):
         try:
             # Simple fetch without composite sort to avoid index error
             users_ref = memory.db.collection('users')
-            # Stream all (or limit if too many) - since we cant sort by date easily without index on huge sets
-            # For admin dashboard, getting top 50 is fine, but lets rely on python sorting for safety
+            # Stream all
             docs = users_ref.stream()
             
             all_users = []
@@ -533,7 +569,8 @@ async def index(request):
                     'username': f"@{info.get('username')}" if info.get('username') else "",
                     'time': time_str,
                     'timestamp': timestamp,
-                    'role': 'user'
+                    'role': 'user',
+                    'blocked': data.get('blocked', False)
                 })
             
             # Python Sort: Newest active first
@@ -545,6 +582,7 @@ async def index(request):
     messages = []
     current_user_name = "Tanlanmagan"
     current_user_initials = "?"
+    current_user_blocked = False
     
     if chat_id and memory.db:
         # NO COMPLEX SORT IN QUERY to fix index error permanently
@@ -563,7 +601,7 @@ async def index(request):
                 if ts:
                     try:
                         timestamp_val = ts.timestamp()
-                        ts_str = ts.strftime("%H:%M")
+                        ts_str = ts.strftime("%H:%M | %d-%b")
                     except:
                         pass
                 
@@ -586,6 +624,10 @@ async def index(request):
                  last = info.get('last_name','') or ''
                  current_user_name = f"{first} {last}".strip()
                  current_user_initials = (first[:1] + last[:1]).upper()
+            
+            # Check blocked status
+            if chat_id in memory.blocked_users:
+                current_user_blocked = True
                  
         except Exception as e:
             logger.error(f"Error fetching logs: {e}")
@@ -597,6 +639,7 @@ async def index(request):
         'current_chat_id': chat_id,
         'current_user_name': current_user_name,
         'current_user_initials': current_user_initials,
+        'current_user_blocked': current_user_blocked,
         'messages': messages
     }
     
