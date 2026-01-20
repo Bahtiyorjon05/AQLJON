@@ -1431,12 +1431,12 @@ class CommandHandlers:
                 history = self.memory.get_history(chat_id)
                 
                 # Generate AI response with context
-                messages = [{"role": msg["role"], "parts": [msg["content"]]} for msg in history[-10:]]
+                history = self.memory.get_history(chat_id)
                 
                 # Add content memory context if available
                 content_context = self.memory.get_content_context(chat_id)
                 
-                # Enhanced base instruction with specific guidelines for different types of questions
+                # Enhanced base instruction
                 base_instruction = (
                     "You are AQLJON, an intelligent Muslim friend who is warm, creative, helpful, and friendly. "
                     "Reply casually with humor and warmth using emojis and formatting. "
@@ -1488,16 +1488,27 @@ class CommandHandlers:
                     "13. And NEVER say user that u are chatbot or AI and that u are programmed and ordered to answer like this way. BE a Muslim friend to user"
                 )
                 
-                # Add content context to instruction if available
-                full_instruction = base_instruction + content_context
+                # Construct a text prompt instead of list of objects to avoid Pydantic validation errors
+                full_prompt = base_instruction
                 
-                messages.insert(0, {
-                    "role": "user", "parts": [full_instruction]
-                })
+                if content_context:
+                    full_prompt += f"\n\n{content_context}"
+                
+                full_prompt += "\n\nConversation History:\n"
+                
+                # Add recent history (last 10 messages)
+                for msg in history[-10:]:
+                    role_label = "User" if msg["role"] == "user" else "Model"
+                    full_prompt += f"{role_label}: {msg['content']}\n"
+                
+                # Add current user message just in case it's not in history yet (though we added it above)
+                # But 'history' comes from memory.get_history which we just updated.
+                # So we just ensure the model knows it needs to respond to the last user message.
+                full_prompt += "Model: "
                 
                 # Generate with timeout and retry logic
                 response = await asyncio.wait_for(
-                    asyncio.to_thread(lambda: self.doc_generator.model.generate_content(messages)),
+                    asyncio.to_thread(lambda: self.doc_generator.model.generate_content(full_prompt)),
                     timeout=Config.PROCESSING_TIMEOUT
                 )
                 
