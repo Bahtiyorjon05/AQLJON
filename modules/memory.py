@@ -1,10 +1,9 @@
 import time
 import json
 import os
-import uuid
 from datetime import datetime, timedelta
 import firebase_admin
-from firebase_admin import credentials, firestore, storage
+from firebase_admin import credentials, firestore
 
 # ─── 🧠 Enhanced Memory Management ─────────────────────────────────────────────────
 class MemoryManager:
@@ -45,12 +44,11 @@ class MemoryManager:
 
     # ─── 💾 Firebase Initialization ─────────────────────────────────────────────────
     def _init_firebase(self):
-        """Initialize Firebase connection with Storage"""
+        """Initialize Firebase connection"""
         try:
             # Check if already initialized
             if firebase_admin._apps:
                 self.db = firestore.client()
-                self.bucket = storage.bucket()
                 print("[OK] Firebase already initialized, reusing connection")
                 return
 
@@ -60,54 +58,22 @@ class MemoryManager:
             if not firebase_creds_json:
                 print("[WARNING] FIREBASE_CREDENTIALS not found. Running in local-only mode (data will be lost on restart).")
                 self.db = None
-                self.bucket = None
                 return
 
             # Parse JSON credentials
             creds_dict = json.loads(firebase_creds_json)
             cred = credentials.Certificate(creds_dict)
-            
-            # Extract project ID for bucket name
-            project_id = creds_dict.get("project_id", "campusconnect-13lbx")
-            
-            # Use the specific bucket name provided by the user
-            bucket_name = "campusconnect-13lbx.firebasestorage.app"
 
-            # Initialize Firebase with Storage Bucket
-            firebase_admin.initialize_app(cred, {
-                'storageBucket': bucket_name
-            })
+            # Initialize Firebase
+            firebase_admin.initialize_app(cred)
             self.db = firestore.client()
-            self.bucket = storage.bucket()
 
-            print(f"[OK] Firebase Firestore & Storage ({bucket_name}) connected successfully!")
+            print("[OK] Firebase Firestore connected successfully!")
 
         except Exception as e:
             print(f"[ERROR] Firebase initialization failed: {e}")
             print("[WARNING] Running in local-only mode (data will be lost on restart)")
             self.db = None
-            self.bucket = None
-
-    def upload_to_storage(self, file_path, file_name, content_type=None):
-        """Upload a file to Firebase Storage and return public URL"""
-        if not self.bucket:
-            return None
-            
-        try:
-            # Create a unique blob name
-            blob_name = f"uploads/{int(time.time())}_{uuid.uuid4().hex[:8]}_{file_name}"
-            blob = self.bucket.blob(blob_name)
-            
-            # Upload
-            blob.upload_from_filename(file_path, content_type=content_type)
-            
-            # Make public
-            blob.make_public()
-            
-            return blob.public_url
-        except Exception as e:
-            print(f"[ERROR] Storage upload failed: {e}")
-            return None
 
     def _load_from_firestore(self):
         """Load all user data from Firestore"""
@@ -147,41 +113,6 @@ class MemoryManager:
 
         except Exception as e:
             print(f"[ERROR] Error loading from Firestore: {e}")
-
-    def log_chat_message(self, chat_id: str, role: str, content: str, msg_type: str = "text", file_info: dict = None):
-        """Log a chat message permanently to Firestore for the website dashboard"""
-        if not self.db:
-            return
-
-        try:
-            # Create a new document in 'chat_logs' collection
-            # Structure: chat_logs/{timestamp_chat_id}
-            timestamp = time.time()
-            doc_id = f"{int(timestamp*1000)}_{chat_id}"
-            
-            log_entry = {
-                "chat_id": chat_id,
-                "role": role,  # 'user' or 'bot'
-                "content": content,
-                "type": msg_type,  # 'text', 'photo', 'document', etc.
-                "timestamp": firestore.SERVER_TIMESTAMP,
-                "timestamp_unix": timestamp
-            }
-            
-            if file_info:
-                log_entry["file_info"] = file_info
-                
-            # Add user info for easier display
-            if chat_id in self.user_info:
-                user = self.user_info[chat_id]
-                log_entry["user_name"] = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
-                log_entry["username"] = user.get('username', '')
-
-            # Save to Firestore
-            self.db.collection('chat_logs').document(doc_id).set(log_entry)
-            
-        except Exception as e:
-            print(f"Error logging chat message: {e}")
 
     def _save_to_firestore(self, chat_id: str):
         """Save a single user's data to Firestore"""
