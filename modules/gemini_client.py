@@ -148,12 +148,30 @@ def get_file(file_name: str):
 
 
 def get_file_state(file_obj):
+    """Safely get file state string from various SDK versions"""
     state = getattr(file_obj, "state", None)
     if state is None:
         return None
-    if isinstance(state, str):
-        return state
+    
+    # Handle dictionary response
     if isinstance(state, dict):
-        return state.get("name") or state.get("state")
-    name = getattr(state, "name", None)
-    return name if name else str(state)
+        val = state.get("name") or state.get("state")
+        return str(val).upper() if val else None
+        
+    # Handle string response
+    if isinstance(state, str):
+        return state.upper()
+        
+    # Handle Enum or Object (new SDK)
+    # Convert to string (e.g. "FileState.ACTIVE" or "ACTIVE")
+    state_str = str(state)
+    
+    # If it's an enum name like 'ACTIVE', accessing .name might work
+    if hasattr(state, "name"):
+        return state.name.upper()
+        
+    # Clean up "FileState." prefix if present
+    if "." in state_str:
+        return state_str.split(".")[-1].upper()
+        
+    return state_str.upper()

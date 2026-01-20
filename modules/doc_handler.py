@@ -189,10 +189,7 @@ class DocumentHandler:
 
                             response = await generate_content_with_retry(
                                 self.model,
-                                [
-                                    {"role": "user", "parts": [instruction]},
-                                    {"role": "user", "parts": [uploaded]}
-                                ]
+                                [instruction, uploaded]  # Pass as simple list of [text, file]
                             )
 
                         # Better validation of Gemini response
