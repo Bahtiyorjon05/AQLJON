@@ -69,7 +69,9 @@ class MemoryManager:
             
             # Extract project ID for bucket name
             project_id = creds_dict.get("project_id", "campusconnect-13lbx")
-            bucket_name = f"{project_id}.appspot.com"
+            
+            # Use the specific bucket name provided by the user
+            bucket_name = "campusconnect-13lbx.firebasestorage.app"
 
             # Initialize Firebase with Storage Bucket
             firebase_admin.initialize_app(cred, {
