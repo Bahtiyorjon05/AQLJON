@@ -235,6 +235,21 @@ class AudioHandler:
                     self.memory.add_to_history(chat_id, "user", f"[uploaded audio: {file_name}]" if hasattr(media, 'file_name') else "[sent voice message 🎤]")
                     self.memory.add_to_history(chat_id, "model", reply)
                     
+                    # Log to permanent storage for dashboard
+                    self.memory.log_chat_message(
+                        chat_id=chat_id,
+                        role="user",
+                        content="[Audioni eshitish]",
+                        msg_type="audio",
+                        file_info={"file_name": file_name, "file_id": media.file_id}
+                    )
+                    self.memory.log_chat_message(
+                        chat_id=chat_id,
+                        role="bot",
+                        content=reply,
+                        msg_type="text"
+                    )
+                    
                     # Send response directly if no analyzing message was shown (for voice messages)
                     if analyzing_msg is None:
                         from modules.utils import send_long_message

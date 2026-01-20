@@ -221,6 +221,21 @@ class VideoHandler:
                     self.memory.add_to_history(chat_id, "user", f"[uploaded video: {video.file_name if video.file_name else 'unknown'}]")
                     self.memory.add_to_history(chat_id, "model", reply)
                     
+                    # Log to permanent storage for dashboard
+                    self.memory.log_chat_message(
+                        chat_id=chat_id,
+                        role="user",
+                        content="[Videoni ko'rish]",
+                        msg_type="video",
+                        file_info={"file_name": video.file_name or "unknown", "file_id": video.file_id}
+                    )
+                    self.memory.log_chat_message(
+                        chat_id=chat_id,
+                        role="bot",
+                        content=reply,
+                        msg_type="text"
+                    )
+                    
                     # Update the analyzing message with results
                     await safe_edit_message(
                         analyzing_msg,

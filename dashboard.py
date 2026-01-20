@@ -324,9 +324,21 @@ def setup_dashboard(app, memory_manager):
                         
                         {% if msg.file_info %}
                         <div class="badge-file">
-                            <i class="bi bi-file-earmark-text fs-5"></i>
+                            {% if msg.type == 'photo' %}
+                                <i class="bi bi-image fs-4 text-primary"></i>
+                            {% elif msg.type == 'video' %}
+                                <i class="bi bi-camera-video fs-4 text-danger"></i>
+                            {% elif msg.type == 'audio' %}
+                                <i class="bi bi-mic fs-4 text-success"></i>
+                            {% else %}
+                                <i class="bi bi-file-earmark-text fs-4 text-secondary"></i>
+                            {% endif %}
+                            
                             <div class="overflow-hidden">
                                 <div class="fw-bold text-truncate">{{ msg.file_info.file_name }}</div>
+                                <small class="text-secondary opacity-75">
+                                    {% if msg.type == 'photo' %}Rasm fayl{% elif msg.type == 'video' %}Video fayl{% elif msg.type == 'audio' %}Audio xabar{% else %}Hujjat{% endif %}
+                                </small>
                             </div>
                         </div>
                         {% endif %}
