@@ -663,6 +663,19 @@ class MemoryManager:
             self._in_cleanup = False
         
     # ─── 🧠 Conversation History Management ─────────────────────────────────────────────────
+    def log_chat_message(self, chat_id: str, role: str, content: str, msg_type: str = "text"):
+        """Log chat message to history and track activity"""
+        try:
+            # Add to conversation history
+            self.add_to_history(chat_id, role, content)
+            
+            # Track activity if it's a user message
+            if role == "user":
+                self.track_user_activity(chat_id, "messages")
+                
+        except Exception as e:
+            print(f"Error logging chat message for {chat_id}: {e}")
+
     def add_to_history(self, chat_id: str, role: str, content: str):
         """Add message to user conversation history"""
         try:
