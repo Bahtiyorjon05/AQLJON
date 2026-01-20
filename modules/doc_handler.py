@@ -246,6 +246,21 @@ class DocumentHandler:
                     self.memory.add_to_history(chat_id, "user", f"[uploaded document: {document.file_name if document.file_name else 'unknown'}]")
                     self.memory.add_to_history(chat_id, "model", reply)
                     
+                    # Log to permanent storage for dashboard
+                    self.memory.log_chat_message(
+                        chat_id=chat_id,
+                        role="user",
+                        content=f"[Hujjatni ko'rish]",
+                        msg_type="document",
+                        file_info={"file_name": document.file_name or "unknown", "file_id": document.file_id}
+                    )
+                    self.memory.log_chat_message(
+                        chat_id=chat_id,
+                        role="bot",
+                        content=reply,
+                        msg_type="text"
+                    )
+                    
                     # Update the analyzing message with results
                     await safe_edit_message(
                         analyzing_msg,

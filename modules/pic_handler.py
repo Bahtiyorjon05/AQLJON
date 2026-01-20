@@ -210,6 +210,21 @@ class PhotoHandler:
                     self.memory.add_to_history(chat_id, "user", "[sent photo 📸]")
                     self.memory.add_to_history(chat_id, "model", reply)
                     
+                    # Log to permanent storage for dashboard
+                    self.memory.log_chat_message(
+                        chat_id=chat_id,
+                        role="user",
+                        content="[Rasmni ko'rish]",
+                        msg_type="photo",
+                        file_info={"file_name": file_name, "file_id": photo.file_id}
+                    )
+                    self.memory.log_chat_message(
+                        chat_id=chat_id,
+                        role="bot",
+                        content=reply,
+                        msg_type="text"
+                    )
+                    
                     # Update the analyzing message with results
                     await safe_edit_message(
                         analyzing_msg,
