@@ -15,7 +15,6 @@ from modules.video_handler import VideoHandler
 from modules.pic_handler import PhotoHandler
 from modules.doc_handler import DocumentHandler
 from modules.command_handlers import CommandHandlers
-from dashboard import setup_dashboard  # Import dashboard setup
 
 # ─── 📝 Logging ────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -248,10 +247,13 @@ async def main_async():
         logger.error(f"Failed to start bot: {e}")
         return
 
-    # 2. Setup Web Dashboard
+    # 2. Setup Web Server (simple health check)
     try:
+        async def handle_root(request):
+            return web.json_response({"status": "online"})
+        
         web_app = web.Application()
-        setup_dashboard(web_app, memory_manager)
+        web_app.router.add_get('/', handle_root)
         
         port = int(os.environ.get("PORT", 8080))
         runner = web.AppRunner(web_app)
@@ -259,12 +261,12 @@ async def main_async():
         site = web.TCPSite(runner, '0.0.0.0', port)
         await site.start()
         
-        logger.info(f"🌐 Dashboard started on port {port}")
+        logger.info(f"🌐 Web server started on port {port}")
     except Exception as e:
-        logger.error(f"Failed to start dashboard: {e}")
+        logger.error(f"Failed to start web server: {e}")
 
     # Keep alive
-    logger.info("✅ System fully operational (Bot + Dashboard)")
+    logger.info("✅ System fully operational")
     stop_event = asyncio.Event()
     await stop_event.wait()
     

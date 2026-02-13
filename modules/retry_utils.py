@@ -12,7 +12,6 @@ from tenacity import (
     retry_if_exception_type,
     before_sleep_log
 )
-from google.api_core import exceptions as google_exceptions
 from modules.gemini_client import get_file, get_file_state, upload_file
 
 logger = logging.getLogger(__name__)
@@ -22,9 +21,6 @@ retry_on_api_error = retry(
     wait=wait_exponential(multiplier=1, min=1, max=10),
     stop=stop_after_attempt(3),
     retry=retry_if_exception_type((
-        google_exceptions.ResourceExhausted,
-        google_exceptions.ServiceUnavailable,
-        google_exceptions.InternalServerError,
         ConnectionError,
         TimeoutError
     )),
@@ -33,7 +29,7 @@ retry_on_api_error = retry(
 )
 
 @retry_on_api_error
-async def generate_content_with_retry(model, messages, timeout=240):
+async def generate_content_with_retry(model, messages, timeout=120):
     """
     Generate content with automatic retry on failure
 
@@ -107,7 +103,7 @@ async def wait_for_file_active(uploaded_file, timeout=30):
     Returns:
         Active file object
     """
-    interval = 2
+    interval = 3
     elapsed = 0
     state = get_file_state(uploaded_file)
 

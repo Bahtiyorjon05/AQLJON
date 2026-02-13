@@ -155,37 +155,14 @@ class AudioHandler:
                         # Generate response with user context
                         content_context = self.memory.get_content_context(chat_id)
                         instruction = (
-                            "You are AQLJON, an intelligent Muslim friend who is warm, creative, helpful, and friendly. "
-                            "Always respond as a friend, never mention you are an AI or use other names. "
-                            "Reply casually with humor and warmth using emojis and formatting different font styles bold italic uppercase lowercase etc. "
-                            "Answer in the same language the user spoke in the audio, otherwise answer in Uzbek.\n\n"
-                            "Don't repeat what user said or ask the user to repeat. and dont be robotic and dont give robotic descriptions"
-                            "IMPORTANT GUIDELINES:\n"
-                            "1. if user asks u to solve academic problem-solving (math, physics, chemistry, coding, biology):\n"
-                            "   - NEVER give direct answers or solutions if they try and show u their answer many times still not correct and when they then ask u for answer then only tell them the answer with awesome explanation\n"
-                            "   - Guide with concepts, understanding, and hints\n"
-                            "   - Encourage users to try solving on their own first\n"
-                            "   - Only verify or correct after they've attempted\n"
-                            "   - tell them to think and try again while giving understanding clearly up to the point\n\n"
-                            
-                            "2. If user said u inappropriate, illegal, or harmful content:\n"
-                            "   - Don't provide any response about that content\n"
-                            "   - Politely redirect to appropriate topics\n"
-                            "   - Maintain Islamic values\n\n"
-                            
-                            "3. Keep your response conversational and natural:\n"
-                            "   - Speak like a friend having a casual conversation\n"
-                            "   - Use emojis, bold, italic different formatting appropriately to express emotions\n"
-                            "   - give short concise answers always unless user asked u to give detailed asnwer\n\n"
-                            
-                            "4. When referencing past content:\n"
-                            "   - You have access to previous conversations and shared content\n"
-                            "   - Reference them naturally when relevant\n"
-                            "   - Never say you can't see previous content\n\n"
-                            
-                            "Here's the context of previous conversations and shared content:\n" + content_context + "\n\n"
-                            
-                            "never say to user that u are programmed to answer like this way"
+                            "You are AQLJON, a warm Muslim friend. Never mention being AI. "
+                            "Reply casually with humor, emojis, bold/italic formatting. "
+                            "Answer in the language spoken in the audio, default Uzbek.\n"
+                            "Rules: 1) For academic problems: guide with hints, don't give direct answers unless user tried multiple times. "
+                            "2) Reject inappropriate/harmful content, maintain Islamic values. "
+                            "3) Keep answers short and concise unless detailed response requested. "
+                            "4) Reference past content naturally when relevant.\n"
+                            + content_context
                         )
 
                         # Generate content with retry logic - Simplified for new SDK
@@ -218,14 +195,7 @@ class AudioHandler:
                 except asyncio.TimeoutError:
                     reply = None
                 
-                # Upload to Firebase Storage for Dashboard
                 file_name = getattr(media, 'file_name', f"audio_{media.file_id[:8]}{suffix}")
-                content_type = getattr(media, 'mime_type', "audio/mpeg")
-                file_url = None
-                try:
-                    file_url = await asyncio.to_thread(self.memory.upload_to_storage, tmp_path, file_name, content_type)
-                except Exception as e:
-                    logger.error(f"Failed to upload audio to storage: {e}")
 
                 if reply:
                     # Store audio content in memory for future reference with complete details
@@ -239,25 +209,6 @@ class AudioHandler:
                     
                     self.memory.add_to_history(chat_id, "user", f"[uploaded audio: {file_name}]" if hasattr(media, 'file_name') else "[sent voice message 🎤]")
                     self.memory.add_to_history(chat_id, "model", reply)
-                    
-                    # Log to permanent storage for dashboard
-                    self.memory.log_chat_message(
-                        chat_id=chat_id,
-                        role="user",
-                        content="[Audioni eshitish]",
-                        msg_type="audio",
-                        file_info={
-                            "file_name": file_name, 
-                            "file_id": media.file_id,
-                            "file_url": file_url
-                        }
-                    )
-                    self.memory.log_chat_message(
-                        chat_id=chat_id,
-                        role="bot",
-                        content=reply,
-                        msg_type="text"
-                    )
                     
                     # Send response directly if no analyzing message was shown (for voice messages)
                     if analyzing_msg is None:

@@ -132,35 +132,14 @@ class PhotoHandler:
                         # Generate response with user context
                         content_context = self.memory.get_content_context(chat_id)
                         instruction = (
-                            "You are AQLJON, an intelligent Muslim friend who is warm, creative, helpful, and friendly. "
-                            "Reply casually with humor and warmth using emojis and formatting. "
-                            "Answer in Uzbek, if user asks for another language use the appropriate language.\n\n"
-                            "IMPORTANT GUIDELINES:\n"
-                            "1. For academic problem-solving (math, physics, chemistry, coding, biology):\n"
-                            "   - NEVER give direct answers or solutions if they try and show u their answer many times still not correct and when they then ask u for answer then only tell them the answer with awesome explanation\n"
-                            "   - Guide with concepts, understanding, and hints\n"
-                            "   - Encourage users to try solving on their own first\n"
-                            "   - Only verify or correct after they've attempted\n"
-                            "   - Force them to think and try again while giving understanding clearly\n\n"
-                            
-                            "2. If the photo contains inappropriate, illegal, or harmful content:\n"
-                            "   - Don't provide any response about that content\n"
-                            "   - Politely redirect to appropriate topics\n"
-                            "   - Maintain Islamic values\n\n"
-                            
-                            "3. Keep your response conversational and natural:\n"
-                            "   - Speak like a friend having a casual conversation\n"
-                            "   - Use emojis, bold, italic, etc formatting styles appropriately to express emotions\n"
-                            "   - Always keep the answer short nice neat with spaces in between bold etc concise but if user asks for detailed response then give details only\n\n"
-                            
-                            "4. When referencing past content:\n"
-                            "   - You have access to previous conversations and shared content\n"
-                            "   - Reference them naturally when relevant\n"
-                            "   - Never say you can't see previous content\n\n"
-                            
-                            "Here's the context of previous conversations and shared content:\n" + content_context + "\n\n"
-                            "and never be robotic. dont give robotic descriptions. respond naturally and smoothly. be warm, friendly, creative and if needed relate to previous context"
-                           "and never say that u are AI or that u are ordered and programmed to answer like this way"
+                            "You are AQLJON, a warm Muslim friend. Never mention being AI. "
+                            "Reply casually with humor, emojis, bold/italic formatting. "
+                            "Answer in Uzbek, use user's language if different.\n"
+                            "Rules: 1) For academic problems: guide with hints, don't give direct answers unless user tried multiple times. "
+                            "2) Reject inappropriate/harmful content, maintain Islamic values. "
+                            "3) Keep answers short and concise unless detailed response requested. "
+                            "4) Reference past content naturally when relevant. Be warm and natural.\n"
+                            + content_context
                         )
 
                         # Generate content with retry logic - Simplified for new SDK
@@ -193,13 +172,7 @@ class PhotoHandler:
                 except asyncio.TimeoutError:
                     reply = None
                 
-                # Upload to Firebase Storage for Dashboard
                 file_name = f"photo_{photo.file_id[:8]}.jpg"
-                file_url = None
-                try:
-                    file_url = await asyncio.to_thread(self.memory.upload_to_storage, tmp_path, file_name, "image/jpeg")
-                except Exception as e:
-                    logger.error(f"Failed to upload photo to storage: {e}")
 
                 if reply:
                     # Store photo content in memory for future reference with complete details
@@ -213,25 +186,6 @@ class PhotoHandler:
                     
                     self.memory.add_to_history(chat_id, "user", "[sent photo 📸]")
                     self.memory.add_to_history(chat_id, "model", reply)
-                    
-                    # Log to permanent storage for dashboard
-                    self.memory.log_chat_message(
-                        chat_id=chat_id,
-                        role="user",
-                        content="[Rasmni ko'rish]",
-                        msg_type="photo",
-                        file_info={
-                            "file_name": file_name, 
-                            "file_id": photo.file_id,
-                            "file_url": file_url
-                        }
-                    )
-                    self.memory.log_chat_message(
-                        chat_id=chat_id,
-                        role="bot",
-                        content=reply,
-                        msg_type="text"
-                    )
                     
                     # Update the analyzing message with results
                     await safe_edit_message(
