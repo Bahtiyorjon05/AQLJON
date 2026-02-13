@@ -45,9 +45,6 @@ class CommandHandlers:
         chat_id = str(update.effective_chat.id)
         self.memory.clear_history(chat_id)
         
-        # Log command usage
-        self.memory.log_chat_message(chat_id, "user", "/start", "command")
-        
         # Track user info and activity when they start
         if update.effective_user:
             user = update.effective_user
@@ -67,7 +64,6 @@ class CommandHandlers:
             # Use fast reply for better performance
             from modules.utils import send_fast_reply
             send_fast_reply(update.message, WELCOME, reply_markup=main_menu_keyboard())
-            self.memory.log_chat_message(chat_id, "bot", WELCOME, "text")
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /help command"""
@@ -75,7 +71,6 @@ class CommandHandlers:
             return
             
         chat_id = str(update.effective_chat.id)
-        self.memory.log_chat_message(chat_id, "user", "/help", "command")
         
         help_text = (
             "<b>✨ AQLJON YORDAM MENUSI</b>\n\n"
@@ -113,7 +108,6 @@ class CommandHandlers:
         # Use fast reply for better performance
         from modules.utils import send_fast_reply
         send_fast_reply(update.message, help_text, reply_markup=main_menu_keyboard())
-        self.memory.log_chat_message(chat_id, "bot", help_text, "text")
     
     async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show user statistics"""
@@ -121,7 +115,6 @@ class CommandHandlers:
             return
             
         chat_id = str(update.effective_chat.id)
-        self.memory.log_chat_message(chat_id, "user", "/stats", "command")
         history = self.memory.get_history(chat_id)
         user_stats_data = self.memory.user_stats.get(chat_id, {})
         user_data = self.memory.user_info.get(chat_id, {})
@@ -235,9 +228,8 @@ class CommandHandlers:
         if user_id not in admin_ids:
             return
             
-        # Log admin command if it's a new message (not pagination)
         if not edit_message:
-            self.memory.log_chat_message(str(update.effective_chat.id), "user", "/adminstats", "command")
+            pass  # Pagination check
         
         # Get page number from context or default to 1
         page = 1
@@ -578,8 +570,6 @@ class CommandHandlers:
         if user_id not in admin_ids:
             return
             
-        self.memory.log_chat_message(str(update.effective_chat.id), "user", "/monitor", "command")
-        
         # Perform cleanup and get metrics
         cleaned_users = self.memory.cleanup_inactive_users()
         
@@ -643,10 +633,8 @@ class CommandHandlers:
         if user_id not in admin_ids:
             return
             
-        # Log broadcast attempt
         chat_id = str(update.effective_chat.id)
         message_text = update.message.text
-        self.memory.log_chat_message(chat_id, "user", message_text, "command")
         
         # Extract message text with formatting instructions
         if not message_text or len(message_text.split(" ", 1)) < 2:
@@ -793,8 +781,6 @@ class CommandHandlers:
         if user_id not in admin_ids:
             return
             
-        self.memory.log_chat_message(str(update.effective_chat.id), "user", "/update", "command")
-        
         # Enhanced update message
         update_message = (
             f"🎉🎉🎉 <b>AQLJON KEYINGI BOSQICHGA O'TDI ! 🌟</b> 🚀\n\n"
@@ -933,9 +919,8 @@ class CommandHandlers:
         if user_id not in admin_ids:
             return
             
-        # Log reply command
+        # Extract reply text
         chat_id = str(update.effective_chat.id)
-        self.memory.log_chat_message(chat_id, "user", update.message.text, "command")
         
         # Extract reply text
         message_text = update.message.text
@@ -968,8 +953,6 @@ class CommandHandlers:
                 parse_mode=ParseMode.HTML
             )
             await safe_reply(update, f"✅ Javob yuborildi foydalanuvchiga: {target_chat_id}")
-            # Log admin reply for target user
-            self.memory.log_chat_message(target_chat_id, "bot", f"[Admin Reply] {admin_reply}", "text")
         except Exception as e:
             # If HTML parsing fails, try sending as plain text
             logger.warning(f"HTML parsing failed for reply: {e}")
@@ -979,8 +962,6 @@ class CommandHandlers:
                     text=reply_msg
                 )
                 await safe_reply(update, f"✅ Javob yuborildi foydalanuvchiga: {target_chat_id} (formatlashsiz)")
-                # Log admin reply
-                self.memory.log_chat_message(target_chat_id, "bot", f"[Admin Reply] {admin_reply}", "text")
             except Exception as e2:
                 logger.error(f"Failed to send reply to user {target_chat_id}: {e2}")
                 await safe_reply(update, f"❌ Javob yuborishda xatolik yuz berdi. Foydalanuvchi {target_chat_id} botni bloklagandir.")
@@ -994,9 +975,7 @@ class CommandHandlers:
         user_id = str(update.effective_user.id)
         admin_ids = [Config.ADMIN_ID.strip()] if Config.ADMIN_ID and Config.ADMIN_ID.strip() else []
         
-        # Log contact command
         chat_id = str(update.effective_chat.id)
-        self.memory.log_chat_message(chat_id, "user", "/contact", "command")
         
         # Admin can't use contact command
         if user_id in admin_ids:
@@ -1010,9 +989,6 @@ class CommandHandlers:
             return
         
         contact_text = message_text.split(" ", 1)[1]
-        
-        # Log the actual contact message
-        self.memory.log_chat_message(chat_id, "user", f"[Contact Message] {contact_text}", "text")
         
         # Store contact message
         if chat_id not in self.memory.user_contact_messages:
@@ -1071,7 +1047,6 @@ class CommandHandlers:
                 
                 # Send immediate confirmation to user
                 await safe_reply(update, "✅ Xabaringiz adminga yuborildi! Tez orada siz bilan bog'lanadilar.")
-                self.memory.log_chat_message(chat_id, "bot", "✅ Xabaringiz adminga yuborildi! Tez orada siz bilan bog'lanadilar.", "text")
                 
             except Exception as e:
                 logger.error(f"Failed to send contact message to admin: {e}")
@@ -1085,7 +1060,6 @@ class CommandHandlers:
             return
         
         chat_id = str(update.effective_chat.id)
-        self.memory.log_chat_message(chat_id, "user", "/generate", "command")
         
         # Show document generation options with enhanced user experience
         if update.message:
@@ -1096,13 +1070,11 @@ class CommandHandlers:
                 parse_mode=ParseMode.HTML,
                 reply_markup=document_generation_keyboard()
             )
-            self.memory.log_chat_message(chat_id, "bot", msg, "text")
     
     async def location_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /location command"""
         if not update.effective_chat:
             return
-        self.memory.log_chat_message(str(update.effective_chat.id), "user", "/location", "command")
         
         # Import here to avoid circular imports
         from modules.location_features.location_handler import get_location_handler
@@ -1115,7 +1087,6 @@ class CommandHandlers:
             return
             
         chat_id = str(update.effective_chat.id) if update.effective_chat else "unknown"
-        self.memory.log_chat_message(chat_id, "user", "/search", "command")
             
         # Extract search query from the command
         message_text = update.message.text
@@ -1125,7 +1096,6 @@ class CommandHandlers:
             try:
                 msg = "🔍 Qidirish uchun so'rov kiriting:\n\nMasalan: <code>/search Python dasturlash</code>"
                 send_fast_reply(update.message, msg)
-                self.memory.log_chat_message(chat_id, "bot", msg, "text")
             except:
                 pass  # Silent fail to prevent delays
             self.user_states[chat_id] = "awaiting_search_query"
@@ -1139,7 +1109,6 @@ class CommandHandlers:
             try:
                 msg = "🔍 Qidirish uchun so'rov kiriting:\n\nMasalan: <code>/search Python dasturlash</code>"
                 send_fast_reply(update.message, msg)
-                self.memory.log_chat_message(chat_id, "bot", msg, "text")
             except:
                 pass  # Silent fail to prevent delays
             self.user_states[chat_id] = "awaiting_search_query"
@@ -1147,7 +1116,6 @@ class CommandHandlers:
             
         # Track search activity
         self.memory.track_user_activity(chat_id, "search_queries", update)
-        self.memory.log_chat_message(chat_id, "user", f"[Search Query] {search_query}", "text")
         
         # Send typing indicator for better UX
         from modules.utils import send_typing
@@ -1160,27 +1128,16 @@ class CommandHandlers:
             # Send search results directly without cleaning HTML tags
             reply_msg = f"<b>🔎 Qidiruv natijalari:</b>\n{result}"
             await safe_reply(update, reply_msg, parse_mode=ParseMode.HTML)
-            self.memory.log_chat_message(chat_id, "bot", reply_msg, "text")
         else:
             from modules.utils import safe_reply
             msg = "❌ Qidiruvda xatolik yuz berdi."
             await safe_reply(update, msg)
-            self.memory.log_chat_message(chat_id, "bot", msg, "text")
     
     async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle text messages and command processing"""
         try:
             chat_id = str(update.effective_chat.id) if update and update.effective_chat else "unknown"
             message = update.message.text.strip() if update and update.message and update.message.text else ""
-
-            # Log user message to Firestore
-            if update.effective_user and message:
-                self.memory.log_chat_message(
-                    chat_id=chat_id, 
-                    role="user", 
-                    content=message, 
-                    msg_type="text"
-                )
 
             # Handle keyboard button presses for conversational flows - PRIORITY HANDLERS FOR MAXIMUM SPEED
             # These must be at the very beginning for immediate response to keyboard selections
@@ -1554,14 +1511,6 @@ class CommandHandlers:
                 
                 if reply:  # Only add to history if we got a reply
                     self.memory.add_to_history(chat_id, "model", reply)
-                    
-                    # Log bot response to Firestore
-                    self.memory.log_chat_message(
-                        chat_id=chat_id,
-                        role="bot",
-                        content=reply,
-                        msg_type="text"
-                    )
                     
                     await send_long_message(update, reply)
                 else:

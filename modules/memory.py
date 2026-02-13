@@ -493,26 +493,27 @@ class MemoryManager:
                 return ""
             
             context_parts = []
-            # Use more content items for better context (last 30 items)
-            recent_content = self.user_content_memory[chat_id][-30:]
+            # Only send last 5 items, truncated, to minimize token usage
+            recent_content = self.user_content_memory[chat_id][-5:]
             
             for item in recent_content:
                 item_type = item.get("type", "")
                 file_name = item.get("file_name", "unknown")
                 full_content = item.get("full_content", "")
+                # Truncate to 200 chars to reduce API costs
+                truncated = full_content[:200] + "..." if len(full_content) > 200 else full_content
                 
                 if item_type == "document":
-                    # Include both file name and full content for documents
-                    context_parts.append(f"Document '{file_name}': {full_content}")
+                    context_parts.append(f"Document '{file_name}': {truncated}")
                 elif item_type == "audio":
-                    context_parts.append(f"Audio message: {full_content}")
+                    context_parts.append(f"Audio: {truncated}")
                 elif item_type == "photo":
-                    context_parts.append(f"Photo '{file_name}': {full_content}")
+                    context_parts.append(f"Photo: {truncated}")
                 elif item_type == "video":
-                    context_parts.append(f"Video '{file_name}': {full_content}")
+                    context_parts.append(f"Video: {truncated}")
             
             if context_parts:
-                return "\n\nPrevious content user shared (use this context when answering related questions - you have full details of all content):\n" + "\n".join(context_parts)
+                return "\nPrevious shared content:\n" + "\n".join(context_parts)
             return ""
         except Exception as e:
             print(f"Error getting content context for {chat_id}: {e}")
@@ -663,32 +664,6 @@ class MemoryManager:
             self._in_cleanup = False
         
     # ─── 🧠 Conversation History Management ─────────────────────────────────────────────────
-    def log_chat_message(self, chat_id: str, role: str, content: str, msg_type: str = "text", **kwargs):
-        """Log chat message to history and track activity"""
-        try:
-            # Add to conversation history
-            self.add_to_history(chat_id, role, content)
-            
-            # Track activity if it's a user message
-            if role == "user":
-                self.track_user_activity(chat_id, "messages")
-                
-        except Exception as e:
-            print(f"Error logging chat message for {chat_id}: {e}")
-
-    def upload_to_storage(self, file_path: str, file_name: str, content_type: str):
-        """Upload file to Firebase Storage"""
-        try:
-            from firebase_admin import storage
-            bucket = storage.bucket()
-            blob = bucket.blob(f"uploads/{file_name}")
-            blob.upload_from_filename(file_path, content_type=content_type)
-            blob.make_public()
-            return blob.public_url
-        except Exception as e:
-            print(f"Error uploading to storage: {e}")
-            return None
-
     def add_to_history(self, chat_id: str, role: str, content: str):
         """Add message to user conversation history"""
         try:

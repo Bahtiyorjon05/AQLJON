@@ -4,7 +4,6 @@ import time
 import logging
 import os
 import mimetypes
-from datetime import datetime
 from telegram import Update, Document
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
@@ -40,16 +39,10 @@ class DocumentHandler:
     def __init__(self, gemini_model, memory_manager: MemoryManager):
         self.model = gemini_model
         self.memory = memory_manager
-        self.rag_chain = None  # RAG system for semantic search (set via set_rag())
         # Track active document processing tasks per user
         self.active_tasks = {}
         # Cleanup task will be started by main.py after event loop starts
         self._cleanup_task = None
-
-    def set_rag(self, rag_chain):
-        """Set RAG chain for document memory integration"""
-        self.rag_chain = rag_chain
-        logger.info("✅ RAG chain integrated into DocumentHandler")
     
     def _get_user_task_key(self, chat_id, task_id=None):
         """Generate a unique key for tracking user document processing tasks"""
@@ -213,14 +206,7 @@ class DocumentHandler:
                 except asyncio.TimeoutError:
                     reply = None
                 
-                # Upload to Firebase Storage for Dashboard
                 file_name = document.file_name if document.file_name else "unknown"
-                content_type = document.mime_type if document.mime_type else "application/octet-stream"
-                file_url = None
-                try:
-                    file_url = await asyncio.to_thread(self.memory.upload_to_storage, tmp_path, file_name, content_type)
-                except Exception as e:
-                    logger.error(f"Failed to upload document to storage: {e}")
 
                 if reply:
                     # Store document content in memory for future reference with complete details
@@ -232,44 +218,8 @@ class DocumentHandler:
                         reply  # full content
                     )
 
-                    # Add to RAG system for semantic search (2025 best practice)
-                    if self.rag_chain:
-                        try:
-                            self.rag_chain.add_document_to_memory(
-                                chat_id,
-                                reply,  # Document content/summary
-                                {
-                                    'file_name': file_name,
-                                    'file_type': file_type,
-                                    'timestamp': datetime.now().isoformat(),
-                                    'content_type': 'document'
-                                }
-                            )
-                            logger.info(f"📚 Document added to RAG system for user {chat_id}")
-                        except Exception as rag_error:
-                            logger.error(f"Failed to add document to RAG: {rag_error}")
-
                     self.memory.add_to_history(chat_id, "user", f"[uploaded document: {file_name}]")
                     self.memory.add_to_history(chat_id, "model", reply)
-                    
-                    # Log to permanent storage for dashboard
-                    self.memory.log_chat_message(
-                        chat_id=chat_id,
-                        role="user",
-                        content=f"[Hujjatni ko'rish]",
-                        msg_type="document",
-                        file_info={
-                            "file_name": file_name, 
-                            "file_id": document.file_id,
-                            "file_url": file_url
-                        }
-                    )
-                    self.memory.log_chat_message(
-                        chat_id=chat_id,
-                        role="bot",
-                        content=reply,
-                        msg_type="text"
-                    )
                     
                     # Update the analyzing message with results
                     await safe_edit_message(
