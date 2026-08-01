@@ -2,6 +2,7 @@ import asyncio
 import time
 import logging
 from datetime import datetime
+from html import escape
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
@@ -35,8 +36,6 @@ class CommandHandlers:
         self.doc_generator = doc_generator
         self.search_web = search_function
         self.user_states = {}  # Track user states for conversational flows
-        self._admin_stats_cache = {}  # Cache for admin stats
-        self._admin_stats_cache_time = {}  # Cache timestamps for admin stats
     
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start command"""
@@ -205,358 +204,303 @@ class CommandHandlers:
         from modules.utils import send_fast_reply
         send_fast_reply(update.message, stats_text)
 
+    # ─── 👑 Admin Statistics ───────────────────────────────────
+    # Rendered as three switchable views so every user fits: a single message
+    # is capped at 4096 chars by Telegram, which the old combined layout was
+    # close to overflowing once the user base grew.
+    ADMIN_VIEWS = ("overview", "users", "blocked")
+    ADMIN_PER_PAGE = 8
+
+    def _admin_user_rows(self):
+        """Every known user with their full stats, most active first."""
+        rows = []
+        location_data = {}
+        try:
+            from modules.location_features.location_handler import get_location_handler
+            location_data = get_location_handler().location_data or {}
+        except Exception:
+            pass
+
+        for chat_id in self.memory.get_all_users():
+            stats = self.memory.user_stats.get(chat_id, {})
+            info = self.memory.user_info.get(chat_id, {})
+
+            full_name = f"{info.get('first_name', '')} {info.get('last_name', '')}".strip() or "Unknown"
+            location = "Not shared"
+            if chat_id in location_data:
+                loc = location_data[chat_id]
+                city = loc.get("city", "Unknown city")
+                try:
+                    location = f"{city} ({loc['latitude']:.4f}, {loc['longitude']:.4f})"
+                except (KeyError, TypeError, ValueError):
+                    location = city
+
+            rows.append({
+                "chat_id": chat_id,
+                "user_id": info.get("user_id", "Unknown"),
+                "username": info.get("username") or "",
+                "full_name": full_name,
+                "blocked": self.memory.is_blocked(chat_id),
+                "messages": stats.get("messages", 0),
+                "photos": stats.get("photos", 0),
+                "voice": stats.get("voice_audio", 0),
+                "documents": stats.get("documents", 0),
+                "videos": stats.get("videos", 0),
+                "searches": stats.get("search_queries", 0),
+                "pdf": stats.get("pdf_generated", 0),
+                "excel": stats.get("excel_generated", 0),
+                "word": stats.get("word_generated", 0),
+                "ppt": stats.get("ppt_generated", 0),
+                "chars": stats.get("total_characters", 0),
+                "first_interaction": stats.get("first_interaction"),
+                "last_active": stats.get("last_active"),
+                "location": location,
+            })
+
+        rows.sort(key=lambda r: r["messages"], reverse=True)
+        return rows
+
+    @staticmethod
+    def _fmt_time(value, fmt="%Y-%m-%d %H:%M"):
+        if not isinstance(value, (int, float)):
+            return "Unknown"
+        try:
+            return datetime.fromtimestamp(value).strftime(fmt)
+        except (ValueError, OSError, OverflowError):
+            return "Unknown"
+
+    @staticmethod
+    def _esc(value):
+        """Escape user-controlled text; an unescaped '<' breaks the whole message."""
+        return escape(str(value))
+
+    def _render_user_row(self, index, u):
+        name = self._esc(u["full_name"])
+        handle = f"@{self._esc(u['username'])}" if u["username"] else "no username"
+        flag = " 🚫" if u["blocked"] else ""
+        docs = u["pdf"] + u["excel"] + u["word"] + u["ppt"]
+
+        text = (
+            f"{index}. <b>{name}</b> ({handle}){flag}\n"
+            f"   🆔 <code>{self._esc(u['user_id'])}</code> | 💬 <b>{u['messages']}</b> msg"
+            f" | ✍️ {u['chars']:,} chars\n"
+            f"   📷 {u['photos']} · 🎤 {u['voice']} · 📄 {u['documents']}"
+            f" · 🎥 {u['videos']} · 🔍 {u['searches']}\n"
+        )
+        if docs:
+            text += (
+                f"   📑 PDF {u['pdf']} · XLS {u['excel']}"
+                f" · DOC {u['word']} · PPT {u['ppt']}\n"
+            )
+        text += (
+            f"   🕐 {self._fmt_time(u['last_active'])}"
+            f" | 📅 {self._fmt_time(u['first_interaction'], '%Y-%m-%d')}\n"
+            f"   📍 {self._esc(u['location'])}\n\n"
+        )
+        return text
+
+    def _build_overview(self, rows):
+        total_users = len(rows)
+        active = [r for r in rows if not r["blocked"]]
+        blocked = [r for r in rows if r["blocked"]]
+
+        def total(key):
+            return sum(r[key] for r in rows)
+
+        total_messages = total("messages")
+        with_messages = [r for r in rows if r["messages"] > 0]
+        avg = total_messages / len(with_messages) if with_messages else 0
+
+        highly = sum(1 for r in rows if r["messages"] >= 20)
+        moderate = sum(1 for r in rows if 5 <= r["messages"] < 20)
+        low = sum(1 for r in rows if 1 <= r["messages"] < 5)
+        silent = sum(1 for r in rows if r["messages"] == 0)
+
+        now = time.time()
+        active_24h = sum(
+            1 for r in rows
+            if isinstance(r["last_active"], (int, float)) and now - r["last_active"] < 86400
+        )
+        active_7d = sum(
+            1 for r in rows
+            if isinstance(r["last_active"], (int, float)) and now - r["last_active"] < 604800
+        )
+
+        memories = sum(len(m) for m in self.memory.user_content_memory.values())
+
+        return (
+            f"👑 <b>ADMIN DASHBOARD</b>\n\n"
+            f"👥 <b>Users</b>\n"
+            f"   Total: <b>{total_users}</b> | Active: <b>{len(active)}</b>"
+            f" | Blocked: <b>{len(blocked)}</b>\n"
+            f"   Active 24h: <b>{active_24h}</b> | 7d: <b>{active_7d}</b>\n\n"
+            f"💬 <b>Messages</b>\n"
+            f"   Total: <b>{total_messages:,}</b> | Avg/user: <b>{avg:.1f}</b>\n"
+            f"   Characters: <b>{total('chars'):,}</b>\n\n"
+            f"🎨 <b>Media</b>\n"
+            f"   📷 Photos: <b>{total('photos')}</b>\n"
+            f"   🎤 Voice/Audio: <b>{total('voice')}</b>\n"
+            f"   📄 Documents: <b>{total('documents')}</b>\n"
+            f"   🎥 Videos: <b>{total('videos')}</b>\n"
+            f"   🔍 Searches: <b>{total('searches')}</b>\n\n"
+            f"📑 <b>Documents Generated</b>\n"
+            f"   PDF: <b>{total('pdf')}</b> | Excel: <b>{total('excel')}</b>\n"
+            f"   Word: <b>{total('word')}</b> | PPT: <b>{total('ppt')}</b>\n\n"
+            f"📊 <b>Activity</b>\n"
+            f"   🔥 Highly active (20+): <b>{highly}</b>\n"
+            f"   ⚡ Moderate (5-19): <b>{moderate}</b>\n"
+            f"   🌱 Low (1-4): <b>{low}</b>\n"
+            f"   💤 No messages yet: <b>{silent}</b>\n\n"
+            f"🧠 <b>Memory</b>\n"
+            f"   Content memories: <b>{memories}</b>\n"
+            f"   History limit: <b>{Config.MAX_HISTORY}</b>/user\n"
+            f"   User limit: <b>{Config.MAX_USERS_IN_MEMORY}</b>\n"
+            f"   Cleanup after: <b>{Config.MAX_INACTIVE_DAYS}</b> days\n\n"
+            f"<i>🔒 Admin only | Use the buttons below</i>"
+        )
+
+    def _build_list(self, rows, page, title, empty_msg):
+        """Paginated user list. Returns (text, page, total_pages)."""
+        total_pages = max(1, (len(rows) + self.ADMIN_PER_PAGE - 1) // self.ADMIN_PER_PAGE)
+        page = max(1, min(page, total_pages))
+        start = (page - 1) * self.ADMIN_PER_PAGE
+        chunk = rows[start:start + self.ADMIN_PER_PAGE]
+
+        if not chunk:
+            return f"{title}\n\n{empty_msg}", page, total_pages
+
+        text = f"{title} — <b>{len(rows)}</b> total (page {page}/{total_pages})\n\n"
+        for offset, user in enumerate(chunk, start + 1):
+            row = self._render_user_row(offset, user)
+            # Stay under Telegram's 4096-char ceiling no matter how long names get.
+            if len(text) + len(row) > 3900:
+                text += "<i>…truncated, use Next ➡️</i>\n"
+                break
+            text += row
+        return text, page, total_pages
+
+    def _admin_keyboard(self, view, page, total_pages):
+        keyboard = []
+        if total_pages > 1:
+            nav = []
+            if page > 1:
+                nav.append(InlineKeyboardButton("⬅️", callback_data=f"admin_stats_page_{page-1}"))
+            nav.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="admin_stats_info"))
+            if page < total_pages:
+                nav.append(InlineKeyboardButton("➡️", callback_data=f"admin_stats_page_{page+1}"))
+            keyboard.append(nav)
+
+        tabs = [
+            ("overview", "📊 Overview"),
+            ("users", "👥 All users"),
+            ("blocked", "🚫 Blocked"),
+        ]
+        keyboard.append([
+            InlineKeyboardButton(("• " + label) if name == view else label,
+                                 callback_data=f"admin_stats_view_{name}")
+            for name, label in tabs
+        ])
+        keyboard.append([InlineKeyboardButton("🔄 Refresh", callback_data=f"admin_stats_view_{view}")])
+        return InlineKeyboardMarkup(keyboard)
+
     async def admin_stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, edit_message: bool = False):
-        """Show detailed admin statistics (admin only) with pagination"""
-        # Support both regular messages and callback queries
+        """Show full admin statistics (admin only), paginated across every user."""
         if not update or not update.effective_user:
             return
 
-        # Determine if this is from a callback or a command
         message = None
         if update.message:
             message = update.message
         elif update.callback_query and update.callback_query.message:
             message = update.callback_query.message
-            edit_message = True  # Always edit when from callback
+            edit_message = True
 
         if not message:
             return
-        
+
         user_id = str(update.effective_user.id)
         admin_ids = [Config.ADMIN_ID.strip()] if Config.ADMIN_ID and Config.ADMIN_ID.strip() else []
-        
         if user_id not in admin_ids:
             return
-            
-        if not edit_message:
-            pass  # Pagination check
-        
-        # Get page number from context or default to 1
-        page = 1
-        blocked_page = 1
-        if context.user_data:
-            if 'admin_stats_page' in context.user_data:
-                page = context.user_data['admin_stats_page']
-            if 'admin_stats_blocked_page' in context.user_data:
-                blocked_page = context.user_data['admin_stats_blocked_page']
-        
-        # Check cache first for better performance - reduced cache time for more responsive updates
-        cache_key = f"admin_stats_{page}_{blocked_page}"
-        current_time = time.time()
-        
-        # Clear old cache entries (older than 5 seconds)
-        old_cache_keys = [k for k, v in self._admin_stats_cache_time.items() if current_time - v > 5]
-        for k in old_cache_keys:
-            if k in self._admin_stats_cache:
-                del self._admin_stats_cache[k]
-            if k in self._admin_stats_cache_time:
-                del self._admin_stats_cache_time[k]
-        
-        if cache_key in self._admin_stats_cache and cache_key in self._admin_stats_cache_time:
-            # Cache is valid for 1 second only (reduced from 2 for even more responsive updates)
-            if current_time - self._admin_stats_cache_time[cache_key] < 1:
-                cached_result = self._admin_stats_cache[cache_key]
-                if edit_message:
-                    # Edit existing message for pagination
-                    try:
-                        await message.edit_text(cached_result[0], parse_mode=ParseMode.HTML, reply_markup=cached_result[1])
-                    except Exception as e:
-                        logger.error(f"Error editing admin stats message: {e}")
-                else:
-                    # Send new message for new command
-                    if cached_result[1]:  # Has reply markup
-                        await message.reply_text(cached_result[0], parse_mode=ParseMode.HTML, reply_markup=cached_result[1])
-                    else:
-                        await send_long_message(update, cached_result[0])
-                return
-        
-        # Calculate comprehensive statistics
-        # Include all users who have started the bot, not just those who sent messages
-        all_users = self.memory.get_all_users()
-        total_users = len(all_users)
-        
-        # Count messages from user_stats instead of user_history since history gets cleaned up
-        total_messages = sum(stats.get("messages", 0) for stats in self.memory.user_stats.values())
-        total_user_messages = total_messages  # Since we're counting all user messages
-        avg_messages = total_user_messages / len(self.memory.user_stats) if len(self.memory.user_stats) > 0 else 0
-        
-        # Media statistics
-        total_photos = sum(stats.get("photos", 0) for stats in self.memory.user_stats.values())
-        total_voice = sum(stats.get("voice_audio", 0) for stats in self.memory.user_stats.values())
-        total_documents = sum(stats.get("documents", 0) for stats in self.memory.user_stats.values())
-        total_videos = sum(stats.get("videos", 0) for stats in self.memory.user_stats.values())
-        total_searches = sum(stats.get("search_queries", 0) for stats in self.memory.user_stats.values())
-        
-        # Document generation statistics
-        total_pdf = sum(stats.get("pdf_generated", 0) for stats in self.memory.user_stats.values())
-        total_excel = sum(stats.get("excel_generated", 0) for stats in self.memory.user_stats.values())
-        total_word = sum(stats.get("word_generated", 0) for stats in self.memory.user_stats.values())
-        total_ppt = sum(stats.get("ppt_generated", 0) for stats in self.memory.user_stats.values())
-        
-        # Activity categorization - based on actual message counts in user_stats
-        highly_active = sum(1 for stats in self.memory.user_stats.values() if stats.get("messages", 0) >= 20)
-        moderately_active = sum(1 for stats in self.memory.user_stats.values() if 5 <= stats.get("messages", 0) < 20)
-        low_activity = sum(1 for stats in self.memory.user_stats.values() if 1 <= stats.get("messages", 0) < 5)
-        
-        # Memory system status
-        total_content_memories = sum(len(memories) for memories in self.memory.user_content_memory.values())
-        
-        # Blocked users information with blocking time
-        blocked_users_count = len(self.memory.blocked_users)
-        blocked_users_details = []
-        for chat_id in self.memory.blocked_users:
-            user_data = self.memory.user_info.get(chat_id, {})
-            username = user_data.get("username", "No username")
-            first_name = user_data.get("first_name", "Unknown")
-            last_name = user_data.get("last_name", "")
-            full_name = f"{first_name} {last_name}".strip() or "Unknown"
-            user_id_info = user_data.get("user_id", "Unknown")
-            
-            # Get blocking time if available
-            blocking_time = "Unknown"
-            if chat_id in self.memory.user_stats:
-                # Try to get last active time as approximate blocking time
-                last_active = self.memory.user_stats[chat_id].get("last_active", "Unknown")
-                if last_active != "Unknown" and isinstance(last_active, (int, float)):
-                    blocking_time = datetime.fromtimestamp(last_active).strftime("%Y-%m-%d %H:%M")
-            
-            blocked_users_details.append({
-                "chat_id": chat_id,
-                "user_id": user_id_info,
-                "username": username,
-                "full_name": full_name,
-                "blocking_time": blocking_time
-            })
-        
-        # Pagination for blocked users (10 users per page)
-        blocked_users_per_page = 10
-        total_blocked_pages = max(1, (len(blocked_users_details) + blocked_users_per_page - 1) // blocked_users_per_page)
-        
-        # Validate and clamp blocked_page to valid range
-        blocked_page = max(1, min(blocked_page, total_blocked_pages))
-        
-        current_blocked_page_users = blocked_users_details[(blocked_page-1)*blocked_users_per_page:blocked_page*blocked_users_per_page]
-        
-        # Top users by message count (30 users, excluding blocked users)
-        user_message_counts = []
-        # Include all users who have started the bot
-        for chat_id in all_users:
-            # Skip blocked users
-            if self.memory.is_blocked(chat_id):
-                continue
-                
-            # Get user messages count from user_stats (0 if user hasn't sent any messages)
-            user_messages = 0
-            if chat_id in self.memory.user_stats:
-                user_messages = self.memory.user_stats[chat_id].get("messages", 0)
-            
-            user_data = self.memory.user_info.get(chat_id, {})
-            username = user_data.get("username", "Unknown")
-            first_name = user_data.get("first_name", "Unknown")
-            last_name = user_data.get("last_name", "")
-            full_name = f"{first_name} {last_name}".strip() or "Unknown"
-            user_id_info = user_data.get("user_id", "Unknown")
-            
-            # Get user's current location if available
-            location_info = "Not shared"
-            try:
-                # Try to get location handler and check if user has location data
-                from modules.location_features.location_handler import get_location_handler
-                location_handler = get_location_handler()
-                if chat_id in location_handler.location_data:
-                    location_data = location_handler.location_data[chat_id]
-                    city = location_data.get("city", "Unknown city")
-                    location_info = f"{city} ({location_data['latitude']:.4f}, {location_data['longitude']:.4f})"
-            except Exception:
-                # If we can't access location handler, just show "Not shared"
-                pass
-            
-            user_message_counts.append({
-                "chat_id": chat_id,
-                "user_id": user_id_info,
-                "username": username,
-                "full_name": full_name,
-                "messages": user_messages,
-                "location": location_info
-            })
-        
-        user_message_counts.sort(key=lambda x: x["messages"], reverse=True)
-        top_30_users = user_message_counts[:30]
-        
-        # Pagination for top users (10 users per page for better UX)
-        users_per_page = 10
-        total_pages = max(1, (len(top_30_users) + users_per_page - 1) // users_per_page)
-        
-        # Validate and clamp page to valid range
-        page = max(1, min(page, total_pages))
-        
-        current_page_users = top_30_users[(page-1)*users_per_page:page*users_per_page]
-        
-        admin_stats_text = (
-            f"👑 <b>ADMIN STATISTICS DASHBOARD</b>\n\n"
-            f"📊 <b>Overall Statistics:</b>\n"
-            f"👥 Total Users: <b>{total_users}</b>\n"
-            f"💬 Total Messages: <b>{total_messages}</b>\n"
-            f"📝 User Messages: <b>{total_user_messages}</b>\n"
-            f"📈 Avg Messages/User: <b>{avg_messages:.1f}</b>\n"
-            f"🚫 Blocked Users: <b>{blocked_users_count}</b>\n\n"
-            f"🎨 <b>Media Breakdown:</b>\n"
-            f"📷 Photos: <b>{total_photos}</b>\n"
-            f"🎤 Voice/Audio: <b>{total_voice}</b>\n"
-            f"📄 Documents: <b>{total_documents}</b>\n"
-            f"🎥 Videos: <b>{total_videos}</b>\n"
-            f"🔍 Searches: <b>{total_searches}</b>\n\n"
-            f"📑 <b>Document Generation:</b>\n"
-            f"📄 PDF Generated: <b>{total_pdf}</b>\n"
-            f"📊 Excel Generated: <b>{total_excel}</b>\n"
-            f"📝 Word Generated: <b>{total_word}</b>\n"
-            f"📽️ PowerPoint Generated: <b>{total_ppt}</b>\n\n"
-            f"📊 <b>User Activity Categories:</b>\n"
-            f"🔥 Highly Active (20+ msgs): <b>{highly_active}</b>\n"
-            f"⚡ Moderately Active (5-19 msgs): <b>{moderately_active}</b>\n"
-            f"🌱 Low Activity (1-4 msgs): <b>{low_activity}</b>\n\n"
-            f"🧠 <b>Memory System:</b>\n"
-            f"💾 Content Memories: <b>{total_content_memories}</b>\n"
-            f"📝 History Limit: <b>{Config.MAX_HISTORY}</b> msgs/user\n"
-            f"👥 User Limit: <b>{Config.MAX_USERS_IN_MEMORY}</b>\n"
-            f"🗓️ Cleanup After: <b>{Config.MAX_INACTIVE_DAYS}</b> days\n\n"
-        )
-        
-        # Add blocked users details with pagination
-        if blocked_users_details:
-            admin_stats_text += f"🚫 <b>Blocked Users Details (Page {blocked_page}/{total_blocked_pages}):</b>\n"
-            for i, user in enumerate(current_blocked_page_users, (blocked_page-1)*blocked_users_per_page + 1):
-                username_display = f"@{user['username']}" if user['username'] != "No username" else "No username"
-                admin_stats_text += (
-                    f"{i}. <b>{user['full_name']}</b> ({username_display})\n"
-                    f"   ID: <code>{user['user_id']}</code> | Chat: <code>{user['chat_id']}</code>\n"
-                    f"   🕐 Blocked: {user['blocking_time']}\n\n"
-                )
-            admin_stats_text += "\n"
-        
-        # Add top users with pagination
-        if current_page_users:
-            admin_stats_text += f"🏆 <b>Top 30 Users by Messages (Page {page}/{total_pages}):</b>\n"
-            for i, user in enumerate(current_page_users, (page-1)*users_per_page + 1):
-                username_display = f"@{user['username']}" if user['username'] != "Unknown" else "No username"
-                admin_stats_text += (
-                    f"{i}. <b>{user['full_name']}</b> ({username_display})\n"
-                    f"   ID: <code>{user['user_id']}</code> | Chat: <code>{user['chat_id']}</code> | Messages: <b>{user['messages']}</b>\n"
-                    f"   📍 Location: {user['location']}\n\n"
-                )
-            
-            # Add pagination controls if needed
-            if total_pages > 1 or total_blocked_pages > 1:
-                keyboard = []
-                
-                # Blocked users pagination
-                if total_blocked_pages > 1:
-                    blocked_nav_row = []
-                    # Previous button for blocked users
-                    if blocked_page > 1:
-                        blocked_nav_row.append(InlineKeyboardButton("⬅️ Blocked Prev", callback_data=f"admin_stats_blocked_page_{blocked_page-1}"))
-                    
-                    # Page info for blocked users
-                    blocked_nav_row.append(InlineKeyboardButton(f"Blocked {blocked_page}/{total_blocked_pages}", callback_data="admin_stats_blocked_info"))
-                    
-                    # Next button for blocked users
-                    if blocked_page < total_blocked_pages:
-                        blocked_nav_row.append(InlineKeyboardButton("Blocked Next ➡️", callback_data=f"admin_stats_blocked_page_{blocked_page+1}"))
-                    
-                    keyboard.append(blocked_nav_row)
-                
-                # Regular users pagination
-                if total_pages > 1:
-                    nav_row = []
-                    # Previous button for regular users
-                    if page > 1:
-                        nav_row.append(InlineKeyboardButton("⬅️ Users Prev", callback_data=f"admin_stats_page_{page-1}"))
-                    
-                    # Page info for regular users
-                    nav_row.append(InlineKeyboardButton(f"Users {page}/{total_pages}", callback_data="admin_stats_info"))
-                    
-                    # Next button for regular users
-                    if page < total_pages:
-                        nav_row.append(InlineKeyboardButton("Users Next ➡️", callback_data=f"admin_stats_page_{page+1}"))
-                    
-                    keyboard.append(nav_row)
-                
-                reply_markup = InlineKeyboardMarkup(keyboard)
-            else:
-                reply_markup = None
-        else:
-            reply_markup = None
-        
-        admin_stats_text += "<i>🔒 Admin-only information | Updated in real-time</i>"
-        
-        # Cache the result for better performance (reduced cache time)
-        self._admin_stats_cache[cache_key] = (admin_stats_text, reply_markup)
-        self._admin_stats_cache_time[cache_key] = current_time
 
-        # Send or edit message based on mode
-        if edit_message:
-            # Edit existing message for pagination
-            try:
-                await message.edit_text(admin_stats_text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
-            except Exception as e:
-                logger.error(f"Error editing admin stats message: {e}")
-                # If edit fails, send a new message
-                if reply_markup:
-                    await message.reply_text(admin_stats_text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
-                else:
-                    await send_long_message(update, admin_stats_text)
+        data = context.user_data if context.user_data is not None else {}
+        view = data.get("admin_stats_view", "overview")
+        if view not in self.ADMIN_VIEWS:
+            view = "overview"
+        page = data.get("admin_stats_page", 1)
+
+        rows = self._admin_user_rows()
+
+        if view == "users":
+            text, page, total_pages = self._build_list(
+                rows, page, "👥 <b>ALL USERS</b>", "No users yet."
+            )
+        elif view == "blocked":
+            text, page, total_pages = self._build_list(
+                [r for r in rows if r["blocked"]], page,
+                "🚫 <b>BLOCKED USERS</b>", "No blocked users. 🎉",
+            )
         else:
-            # Send new message for new command
-            if reply_markup:
-                await message.reply_text(admin_stats_text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
-            else:
-                await send_long_message(update, admin_stats_text)
-    
+            text, total_pages = self._build_overview(rows), 1
+            page = 1
+
+        if context.user_data is not None:
+            context.user_data["admin_stats_page"] = page
+
+        reply_markup = self._admin_keyboard(view, page, total_pages)
+
+        if edit_message:
+            try:
+                await message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+            except Exception as e:
+                # "message is not modified" is expected when Refresh changes nothing.
+                if "not modified" not in str(e).lower():
+                    logger.error(f"Error editing admin stats message: {e}")
+        else:
+            await message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+
     async def handle_admin_stats_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle pagination callbacks for admin stats"""
+        """Handle view switching and pagination for admin stats"""
         if not update.callback_query or not update.effective_user:
             return
-            
+
         query = update.callback_query
         user_id = str(update.effective_user.id)
         admin_ids = [Config.ADMIN_ID.strip()] if Config.ADMIN_ID and Config.ADMIN_ID.strip() else []
-        
+
         if user_id not in admin_ids:
             await query.answer("❌ Access denied", show_alert=True)
             return
-        
-        if query.data and query.data.startswith("admin_stats_page_"):
-            try:
-                page = int(query.data.split("_")[-1])
-                # Store page in context
-                if context.user_data is None:
-                    context.user_data = {}
-                context.user_data['admin_stats_page'] = page
 
-                # Re-call admin stats with new page - will auto-edit message
-                await self.admin_stats_command(update, context, edit_message=True)
-                await query.answer()
-            except (ValueError, IndexError) as e:
-                logger.error(f"Error parsing admin stats page: {e}")
-                await query.answer("❌ Invalid page", show_alert=True)
-        elif query.data and query.data.startswith("admin_stats_blocked_page_"):
-            try:
-                blocked_page = int(query.data.split("_")[-1])
-                # Store blocked page in context
-                if context.user_data is None:
-                    context.user_data = {}
-                context.user_data['admin_stats_blocked_page'] = blocked_page
+        data = query.data or ""
+        if context.user_data is None:
+            await query.answer()
+            return
 
-                # Re-call admin stats with new blocked page - will auto-edit message
-                await self.admin_stats_command(update, context, edit_message=True)
-                await query.answer()
-            except (ValueError, IndexError) as e:
-                logger.error(f"Error parsing admin stats blocked page: {e}")
+        if data.startswith("admin_stats_view_"):
+            view = data[len("admin_stats_view_"):]
+            if view not in self.ADMIN_VIEWS:
+                await query.answer("❌ Unknown view", show_alert=True)
+                return
+            # Switching views resets paging, otherwise page 5 of users would
+            # carry over into a blocked list that has only two pages.
+            if context.user_data.get("admin_stats_view") != view:
+                context.user_data["admin_stats_page"] = 1
+            context.user_data["admin_stats_view"] = view
+            await self.admin_stats_command(update, context, edit_message=True)
+            await query.answer()
+        elif data.startswith("admin_stats_page_"):
+            try:
+                context.user_data["admin_stats_page"] = int(data.rsplit("_", 1)[1])
+            except (ValueError, IndexError):
                 await query.answer("❌ Invalid page", show_alert=True)
-        elif query.data and query.data == "admin_stats_info":
-            await query.answer("Page navigation", show_alert=False)
-        elif query.data and query.data == "admin_stats_blocked_info":
-            await query.answer("Blocked users page navigation", show_alert=False)
+                return
+            await self.admin_stats_command(update, context, edit_message=True)
+            await query.answer()
+        elif data == "admin_stats_info":
+            await query.answer("Use ⬅️ ➡️ to change page")
+        else:
+            await query.answer()
     
     async def system_monitor_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Monitor system health and performance (admin only)"""
