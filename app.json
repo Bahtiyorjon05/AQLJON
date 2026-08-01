@@ -29,8 +29,12 @@
       "required": true
     },
     "GEMINI_API_KEY": {
-      "description": "Your Google Gemini API Key from https://makersuite.google.com/app/apikey",
+      "description": "Your Google Gemini API Key from https://aistudio.google.com/apikey",
       "required": true
+    },
+    "GEMINI_API_KEYS": {
+      "description": "Optional extra Gemini API keys, comma-separated. The bot rotates to the next key when one hits its daily free-tier quota. Create each key under a different Google account, since keys in one account share a quota.",
+      "required": false
     },
     "GEMINI_MODEL": {
       "description": "Gemini model ID (optional, default: gemini-3-flash-preview)",

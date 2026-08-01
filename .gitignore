@@ -95,6 +95,7 @@ venv.bak/
 .vscode/
 .idea/
 .claude/
+.qwen/
 *.swp
 *.swo
 *~

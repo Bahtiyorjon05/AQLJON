@@ -1,0 +1,60 @@
+#!/bin/sh
+#
+# Blocks commits that contain secrets.
+#
+# This repo leaked its Telegram bot token via a committed .env once already,
+# which let an attacker rebrand the bot. This hook exists so it cannot recur.
+#
+# Enable with:  git config core.hooksPath .githooks
+# Bypass (only for a verified false positive):  git commit --no-verify
+
+fail=0
+
+# 1. Never allow a real .env (or any variant) to be staged. .env.example is fine.
+env_files=$(git diff --cached --name-only --diff-filter=ACM \
+    | grep -E '(^|/)\.env(\..*)?$' \
+    | grep -v -E '\.example$|\.sample$|\.template$')
+
+if [ -n "$env_files" ]; then
+    echo "BLOCKED: attempting to commit an environment file:"
+    echo "$env_files" | sed 's/^/  - /'
+    echo "  Secrets belong in Heroku config vars, not in git."
+    fail=1
+fi
+
+# 2. Scan staged content for credential patterns.
+#    Only added lines are checked, so pre-existing history does not block work.
+added=$(git diff --cached --diff-filter=ACM -U0 | grep '^+' | grep -v '^+++')
+
+check() {
+    pattern="$1"
+    label="$2"
+    # Lines that merely name the variable without a value are allowed, so
+    # .env.example and docs using placeholders still pass.
+    hits=$(printf '%s\n' "$added" \
+        | grep -E "$pattern" \
+        | grep -v -E 'YOUR_|<your|xxx|XXX|example|placeholder|\.\.\.|getenv|environ')
+    if [ -n "$hits" ]; then
+        echo "BLOCKED: possible $label in staged changes:"
+        printf '%s\n' "$hits" | cut -c1-100 | sed 's/^/  /'
+        fail=1
+    fi
+}
+
+# Telegram bot token: <digits>:<35 char base64-ish secret>
+check '[0-9]{8,10}:[A-Za-z0-9_-]{35}'      "Telegram bot token"
+# Google / Gemini API key
+check 'AIza[A-Za-z0-9_-]{35}'              "Google API key"
+# Firebase / GCP service-account private key
+check 'BEGIN (RSA |EC )?PRIVATE KEY'       "private key"
+# Generic long secret assigned to an obviously sensitive name
+check '(SECRET|PASSWORD|API_KEY|TOKEN)[A-Z_]*[[:space:]]*[=:][[:space:]]*["'"'"']?[A-Za-z0-9_-]{20,}' "hardcoded credential"
+
+if [ "$fail" -ne 0 ]; then
+    echo ""
+    echo "Commit aborted. Move the value into an environment variable."
+    echo "If this is genuinely a false positive: git commit --no-verify"
+    exit 1
+fi
+
+exit 0

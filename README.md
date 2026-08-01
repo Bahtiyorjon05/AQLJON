@@ -212,11 +212,42 @@ heroku logs --tail
 ```env
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 GEMINI_API_KEY=your_gemini_api_key
+GEMINI_API_KEYS=second_key,third_key   # optional, see below
 GEMINI_MODEL=gemini-3-flash-preview
 GEMINI_MODEL_FALLBACK=gemini-2.5-flash
 SERPER_API_KEY=your_serper_api_key  
 ADMIN_ID=your_telegram_user_id      
+FIREBASE_CREDENTIALS={"type":"service_account",...}  # optional, enables persistence
 ```
+
+See [.env.example](.env.example) for the full annotated list.
+
+### 🔑 Free-Tier Key Rotation
+
+`GEMINI_API_KEYS` takes a comma-separated pool of keys. When one key hits its
+daily free-tier quota (HTTP 429 / `RESOURCE_EXHAUSTED`), the bot automatically
+switches to the next key and retries the same request — so N keys give roughly
+N times the free daily budget at no cost.
+
+Create each key under a **different Google account**; keys within a single
+account share one quota, so extra keys from the same account do not help.
+
+Uploaded media stays pinned to the key that uploaded it, since files only exist
+inside their own key's project. If every key is exhausted, the last error is
+raised rather than looping.
+
+### 🔐 Secret Hygiene
+
+This repo ships a pre-commit hook that blocks commits containing bot tokens,
+Google API keys, private keys, or a real `.env`. Enable it once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Never commit `.env` — set secrets as Heroku config vars instead. If a token is
+ever exposed, revoke it immediately via `/revoke` in [@BotFather](https://t.me/BotFather)
+(deleting the file from a later commit does **not** remove it from git history).
 
 ## 📖 Usage Guide
 

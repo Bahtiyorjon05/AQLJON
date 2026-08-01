@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import signal
 import time
 import os
 from aiohttp import web
@@ -248,6 +249,7 @@ async def main_async():
         return
 
     # 2. Setup Web Server (simple health check)
+    runner = None
     try:
         async def handle_root(request):
             return web.json_response({"status": "online"})
@@ -265,16 +267,51 @@ async def main_async():
     except Exception as e:
         logger.error(f"Failed to start web server: {e}")
 
-    # Keep alive
+    # Keep alive until the platform asks us to stop.
+    # Heroku cycles dynos daily and sends SIGTERM before SIGKILL, so the
+    # shutdown path below is what prevents losing up to 5 minutes of user data
+    # (the gap since the last periodic save) on every restart.
     logger.info("✅ System fully operational")
     stop_event = asyncio.Event()
-    await stop_event.wait()
-    
-    # Cleanup
-    await app.updater.stop()
-    await app.stop()
-    await app.shutdown()
-    await runner.cleanup()
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, stop_event.set)
+        except NotImplementedError:
+            # Windows has no add_signal_handler; fall back to signal.signal.
+            signal.signal(sig, lambda *_: loop.call_soon_threadsafe(stop_event.set))
+
+    try:
+        await stop_event.wait()
+    except asyncio.CancelledError:
+        pass
+
+    # ─── 🛑 Graceful Shutdown ───────────────────────────────────
+    logger.info("🛑 Shutdown signal received, stopping cleanly...")
+
+    try:
+        if app.updater and app.updater.running:
+            await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
+    except Exception as e:
+        logger.error(f"Error stopping bot: {e}")
+
+    # Flush user data last, so stats collected right up to shutdown survive.
+    try:
+        if memory_manager.save_persistent_data():
+            logger.info(f"💾 Final save complete: {len(memory_manager.user_stats)} users")
+    except Exception as e:
+        logger.error(f"Error during final save: {e}")
+
+    try:
+        if runner:
+            await runner.cleanup()
+    except Exception as e:
+        logger.error(f"Error stopping web server: {e}")
+
+    logger.info("👋 Shutdown complete")
 
 def main():
     try:
